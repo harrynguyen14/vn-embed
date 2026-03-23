@@ -31,18 +31,13 @@ def triplets_to_dataset(triplets: list[dict]) -> Dataset:
     return Dataset.from_dict(data)
 
 
-class NegativeSamplingDataset(torch.utils.data.Dataset):
-    """Wraps a HF Dataset, randomly picking 1 negative per step."""
-    def __init__(self, hf_dataset):
-        self.ds = hf_dataset
-
-    def __len__(self):
-        return len(self.ds)
-
-    def __getitem__(self, idx):
-        row = self.ds[idx]
-        neg = row["negatives"][torch.randint(len(row["negatives"]), (1,)).item()]
-        return {"anchor": row["anchor"], "positive": row["positive"], "negative": neg}
+def sample_negatives(batch: dict) -> dict:
+    import random
+    return {
+        "anchor":   batch["anchor"],
+        "positive": batch["positive"],
+        "negative": [random.choice(negs) for negs in batch["negatives"]],
+    }
 
 
 class Evaluator(SentenceEvaluator):
@@ -72,7 +67,8 @@ def train(args: argparse.Namespace) -> None:
         seed         = args.seed,
     )
 
-    train_dataset = NegativeSamplingDataset(triplets_to_dataset(train_triplets))
+    train_dataset = triplets_to_dataset(train_triplets)
+    train_dataset.set_transform(sample_negatives)
     evaluator = Evaluator(dev_triplets, batch_size=args.eval_batch_size)
 
     model      = load_model(args.model_name)
