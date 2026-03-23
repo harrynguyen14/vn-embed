@@ -65,7 +65,7 @@ def train(args: argparse.Namespace) -> None:
     model      = load_model(args.model_name)
     train_loss = get_loss(model)
 
-    column_mapping = {
+    column_rename = {
         "anchor": "anchor", 
         "positive": "positive", 
         "negative": "negative"
@@ -101,7 +101,7 @@ def train(args: argparse.Namespace) -> None:
         train_dataset=train_dataset,
         loss=train_loss,
         evaluator=evaluator,
-        column_mapping=column_mapping,
+        column_mapping=column_rename,
         callbacks=[
             EarlyStoppingCallback(early_stopping_patience=args.patience),
         ],
