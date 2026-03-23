@@ -8,7 +8,7 @@ from pathlib import Path
 
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
-os.environ.setdefault("HF_MODULES_CACHE", str(Path(__file__).parent / "models"))
+os.environ.setdefault("HF_MODULES_CACHE", "/kaggle/working")
 
 import torch
 
