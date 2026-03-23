@@ -1,0 +1,11 @@
+splits
+output
+loaders
+__pycache__
+*.pyc
+cache_sapo_vecs.npy
+cache_title_vecs.npy
+faiss_ivf.index
+filtered_bkai.parquet
+faiss_docids.npy
+splits.zip
