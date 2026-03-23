@@ -62,6 +62,8 @@ class Evaluator(SentenceEvaluator):
 
 
 def train(args: argparse.Namespace) -> None:
+    # gte-multilingual-base uses custom modeling code incompatible with DataParallel
+    os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
     device = get_device()
     logger.info("Device: %s", device)
 
@@ -82,7 +84,8 @@ def train(args: argparse.Namespace) -> None:
         output_dir          = args.output_dir,
         num_train_epochs    = args.epochs,
         per_device_train_batch_size = args.batch_size,
-        per_device_eval_batch_size=args.eval_batch_size,
+        per_device_eval_batch_size  = args.eval_batch_size,
+        ddp_find_unused_parameters  = False,
         learning_rate       = args.lr,
         warmup_ratio        = args.warmup_ratio,
         weight_decay                = args.weight_decay,
