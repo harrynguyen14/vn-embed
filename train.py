@@ -86,11 +86,13 @@ def train(args: argparse.Namespace) -> None:
         per_device_train_batch_size = args.batch_size,
         per_device_eval_batch_size  = args.eval_batch_size,
         ddp_find_unused_parameters  = False,
-        learning_rate       = args.lr,
-        warmup_ratio        = args.warmup_ratio,
+        bf16                        = torch.cuda.is_bf16_supported(),
+        fp16                        = not torch.cuda.is_bf16_supported() and torch.cuda.is_available(),
+        learning_rate               = args.lr,
+        warmup_steps                = args.warmup_steps,
         weight_decay                = args.weight_decay,
         max_grad_norm               = args.max_grad_norm,
-        gradient_accumulation_steps = 1,
+        gradient_accumulation_steps = args.grad_accum,
         logging_steps       = args.log_every,
         eval_strategy       = "epoch",
         save_strategy       = "epoch",
@@ -138,7 +140,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--batch-size",      type=int,   default=8)
     p.add_argument("--max-hard-neg",    type=int,   default=3)
     p.add_argument("--lr",              type=float, default=2e-5)
-    p.add_argument("--warmup-ratio",    type=float, default=0.1)
+    p.add_argument("--warmup-steps",    type=int,   default=200)
     p.add_argument("--eval-batch-size", type=int,   default=256)
     p.add_argument("--seed",            type=int,   default=42)
     p.add_argument("--log-every",       type=int,   default=10)
