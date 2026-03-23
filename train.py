@@ -23,13 +23,26 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s")
 
 
 def triplets_to_dataset(triplets: list[dict]) -> Dataset:
-
     data = {
-        "anchor": [t["query"] for t in triplets],
-        "positive": [t["positive"] for t in triplets],
-        "negative": [t["negatives"][0] for t in triplets] 
+        "anchor":    [t["query"]    for t in triplets],
+        "positive":  [t["positive"] for t in triplets],
+        "negatives": [t["negatives"] for t in triplets],  # list of hard negs
     }
     return Dataset.from_dict(data)
+
+
+class NegativeSamplingDataset(torch.utils.data.Dataset):
+    """Wraps a HF Dataset, randomly picking 1 negative per step."""
+    def __init__(self, hf_dataset):
+        self.ds = hf_dataset
+
+    def __len__(self):
+        return len(self.ds)
+
+    def __getitem__(self, idx):
+        row = self.ds[idx]
+        neg = row["negatives"][torch.randint(len(row["negatives"]), (1,)).item()]
+        return {"anchor": row["anchor"], "positive": row["positive"], "negative": neg}
 
 
 class Evaluator(SentenceEvaluator):
@@ -59,17 +72,11 @@ def train(args: argparse.Namespace) -> None:
         seed         = args.seed,
     )
 
-    train_dataset = triplets_to_dataset(train_triplets)
+    train_dataset = NegativeSamplingDataset(triplets_to_dataset(train_triplets))
     evaluator = Evaluator(dev_triplets, batch_size=args.eval_batch_size)
 
     model      = load_model(args.model_name)
     train_loss = get_loss(model)
-
-    column_rename = {
-        "anchor": "anchor", 
-        "positive": "positive", 
-        "negative": "negative"
-    }
 
     training_args = SentenceTransformerTrainingArguments(
         output_dir          = args.output_dir,
@@ -101,7 +108,6 @@ def train(args: argparse.Namespace) -> None:
         train_dataset=train_dataset,
         loss=train_loss,
         evaluator=evaluator,
-        column_mapping=column_rename,
         callbacks=[
             EarlyStoppingCallback(early_stopping_patience=args.patience),
         ],
