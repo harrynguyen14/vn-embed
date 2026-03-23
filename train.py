@@ -22,22 +22,23 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s")
 
 
-def triplets_to_dataset(triplets: list[dict]) -> Dataset:
-    data = {
-        "anchor":    [t["query"]    for t in triplets],
-        "positive":  [t["positive"] for t in triplets],
-        "negatives": [t["negatives"] for t in triplets],  # list of hard negs
-    }
-    return Dataset.from_dict(data)
-
-
-def sample_negatives(batch: dict) -> dict:
+def sample_dataset(triplets: list[dict]) -> Dataset:
     import random
-    return {
-        "anchor":   batch["anchor"],
-        "positive": batch["positive"],
-        "negative": [random.choice(negs) for negs in batch["negatives"]],
-    }
+    return Dataset.from_dict({
+        "anchor":   [t["query"]                  for t in triplets],
+        "positive": [t["positive"]               for t in triplets],
+        "negative": [random.choice(t["negatives"]) for t in triplets],
+    })
+
+
+class ResampleNegativesCallback(TrainerCallback):
+    """Re-samples 1 hard negative per query at the start of each epoch."""
+    def __init__(self, triplets: list[dict]):
+        self.triplets = triplets
+
+    def on_epoch_begin(self, args, state: TrainerState, control: TrainerControl, **kwargs):
+        trainer = kwargs["trainer"]
+        trainer.train_dataset = sample_dataset(self.triplets)
 
 
 class Evaluator(SentenceEvaluator):
@@ -67,8 +68,7 @@ def train(args: argparse.Namespace) -> None:
         seed         = args.seed,
     )
 
-    train_dataset = triplets_to_dataset(train_triplets)
-    train_dataset.set_transform(sample_negatives)
+    train_dataset = sample_dataset(train_triplets)
     evaluator = Evaluator(dev_triplets, batch_size=args.eval_batch_size)
 
     model      = load_model(args.model_name)
@@ -106,6 +106,7 @@ def train(args: argparse.Namespace) -> None:
         evaluator=evaluator,
         callbacks=[
             EarlyStoppingCallback(early_stopping_patience=args.patience),
+            ResampleNegativesCallback(train_triplets),
         ],
     )
 
