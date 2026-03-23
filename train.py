@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import gc
 import logging
 import os
+import random
 from pathlib import Path
-
-import pandas as pd
-import torch
 
 from sentence_transformers import SentenceTransformerTrainer, SentenceTransformerTrainingArguments
 from sentence_transformers.evaluation import SentenceEvaluator
@@ -16,14 +13,13 @@ from datasets import Dataset
 
 from dataset_processor import build_dataloaders
 from evaluate import evaluate_retrieval
-from model import get_loss, get_device, load_model
+from model import get_loss, load_model
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s")
 
 
 def sample_dataset(triplets: list[dict]) -> Dataset:
-    import random
     return Dataset.from_dict({
         "anchor":   [t["query"]                  for t in triplets],
         "positive": [t["positive"]               for t in triplets],
@@ -41,13 +37,12 @@ class ResampleNegativesCallback(TrainerCallback):
         self._trainer = kwargs.get("trainer")
 
     def on_epoch_begin(self, args, state: TrainerState, control: TrainerControl, **kwargs):
-        if self._trainer is not None:
+        if self._trainer is not None and state.epoch > 0:
             self._trainer.train_dataset = sample_dataset(self.triplets)
 
 
 class Evaluator(SentenceEvaluator):
     def __init__(self, triplets: list[dict], batch_size: int = 256, max_samples: int = 2000):
-        import random
         eval_data = triplets.copy()
         random.shuffle(eval_data)
         self.triplets = eval_data[:max_samples]
@@ -64,8 +59,6 @@ class Evaluator(SentenceEvaluator):
 def train(args: argparse.Namespace) -> None:
     # gte-multilingual-base uses custom modeling code incompatible with DataParallel
     os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
-    device = get_device()
-    logger.info("Device: %s", device)
 
     train_triplets, dev_triplets, test_triplets = build_dataloaders(
         input_path   = Path(args.data),
@@ -75,18 +68,9 @@ def train(args: argparse.Namespace) -> None:
     )
 
     train_dataset = sample_dataset(train_triplets)
-    evaluator = Evaluator(dev_triplets, batch_size=args.eval_batch_size)
 
     model      = load_model(args.model_name)
     train_loss = get_loss(model)
-
-    # --- debug: sanity check model output ---
-    _test_emb = model.encode(["xin chào"], convert_to_tensor=True)
-    logger.info("DEBUG embed shape=%s dtype=%s nan=%s norm=%.4f",
-                _test_emb.shape, _test_emb.dtype,
-                torch.isnan(_test_emb).any().item(),
-                _test_emb.norm().item())
-    # ----------------------------------------
 
     training_args = SentenceTransformerTrainingArguments(
         output_dir          = args.output_dir,
@@ -94,8 +78,8 @@ def train(args: argparse.Namespace) -> None:
         per_device_train_batch_size = args.batch_size,
         per_device_eval_batch_size  = args.eval_batch_size,
         ddp_find_unused_parameters  = False,
-        bf16                        = torch.cuda.is_bf16_supported(),
-        fp16                        = False,
+        bf16                        = False,
+        fp16                        = True,
         learning_rate               = args.lr,
         warmup_steps                = args.warmup_steps,
         weight_decay                = args.weight_decay,
