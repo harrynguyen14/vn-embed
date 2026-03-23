@@ -11,7 +11,7 @@ def load_model(model_name: str = MODEL_NAME, max_seq_length: int = 256) -> Sente
     model = SentenceTransformer(
         model_name,
         trust_remote_code=True,
-        model_kwargs={"torch_dtype": torch.float16},
+        model_kwargs={"torch_dtype": torch.float32},
     )
     model.max_seq_length = max_seq_length
     
