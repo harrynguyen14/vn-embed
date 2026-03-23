@@ -58,6 +58,7 @@ def train(args: argparse.Namespace) -> None:
 
     train_triplets, dev_triplets, test_triplets = build_dataloaders(
         input_path   = Path(args.data),
+        split_dir    = Path(args.splits_dir),
         max_hard_neg = args.max_hard_neg,
         seed         = args.seed,
     )
@@ -118,6 +119,7 @@ def parse_args() -> argparse.Namespace:
 
     p.add_argument("--model-name",      default="Alibaba-NLP/gte-multilingual-base")
     p.add_argument("--data",            default="filtered_bkai.parquet")
+    p.add_argument("--splits-dir",      default="splits")
     p.add_argument("--output-dir",      default="output/gte-vn")
     p.add_argument("--epochs",          type=int,   default=3)
     p.add_argument("--batch-size",      type=int,   default=8)
