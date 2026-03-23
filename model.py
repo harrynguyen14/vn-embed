@@ -18,7 +18,7 @@ def load_model(model_name: str = MODEL_NAME, max_seq_length: int = 256) -> Sente
     return model
 
 def get_loss(model: SentenceTransformer) -> losses.MultipleNegativesRankingLoss:
-    return losses.MultipleNegativesRankingLoss(model, scale=20.0)
+    return losses.MultipleNegativesRankingLoss(model)
 
 def get_device() -> str:
     if torch.cuda.is_available():

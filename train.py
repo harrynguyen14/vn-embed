@@ -95,7 +95,7 @@ def train(args: argparse.Namespace) -> None:
         per_device_eval_batch_size  = args.eval_batch_size,
         ddp_find_unused_parameters  = False,
         bf16                        = torch.cuda.is_bf16_supported(),
-        fp16                        = not torch.cuda.is_bf16_supported() and torch.cuda.is_available(),
+        fp16                        = False,
         learning_rate               = args.lr,
         warmup_steps                = args.warmup_steps,
         weight_decay                = args.weight_decay,
