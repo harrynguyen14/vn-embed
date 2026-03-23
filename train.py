@@ -3,7 +3,11 @@ from __future__ import annotations
 import argparse
 import gc
 import logging
+import os
 from pathlib import Path
+
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
 
 import torch
 
