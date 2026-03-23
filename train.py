@@ -80,6 +80,14 @@ def train(args: argparse.Namespace) -> None:
     model      = load_model(args.model_name)
     train_loss = get_loss(model)
 
+    # --- debug: sanity check model output ---
+    _test_emb = model.encode(["xin chào"], convert_to_tensor=True)
+    logger.info("DEBUG embed shape=%s dtype=%s nan=%s norm=%.4f",
+                _test_emb.shape, _test_emb.dtype,
+                torch.isnan(_test_emb).any().item(),
+                _test_emb.norm().item())
+    # ----------------------------------------
+
     training_args = SentenceTransformerTrainingArguments(
         output_dir          = args.output_dir,
         num_train_epochs    = args.epochs,
