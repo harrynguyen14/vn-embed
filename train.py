@@ -35,10 +35,14 @@ class ResampleNegativesCallback(TrainerCallback):
     """Re-samples 1 hard negative per query at the start of each epoch."""
     def __init__(self, triplets: list[dict]):
         self.triplets = triplets
+        self._trainer = None
+
+    def on_init_end(self, args, state: TrainerState, control: TrainerControl, **kwargs):
+        self._trainer = kwargs.get("trainer")
 
     def on_epoch_begin(self, args, state: TrainerState, control: TrainerControl, **kwargs):
-        trainer = kwargs["trainer"]
-        trainer.train_dataset = sample_dataset(self.triplets)
+        if self._trainer is not None:
+            self._trainer.train_dataset = sample_dataset(self.triplets)
 
 
 class Evaluator(SentenceEvaluator):
