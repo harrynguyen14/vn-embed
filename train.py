@@ -6,15 +6,12 @@ import logging
 import os
 from pathlib import Path
 
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
-os.environ.setdefault("HF_MODULES_CACHE", "/kaggle/working")
-
+import pandas as pd
 import torch
 
 from sentence_transformers import SentenceTransformerTrainer, SentenceTransformerTrainingArguments
 from sentence_transformers.evaluation import SentenceEvaluator
-from transformers import EarlyStoppingCallback
+from transformers import EarlyStoppingCallback, TrainerCallback, TrainerControl, TrainerState
 from datasets import Dataset
 
 from dataset_processor import build_dataloaders
@@ -26,38 +23,32 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s")
 
 
 def triplets_to_dataset(triplets: list[dict]) -> Dataset:
-    rows = [
-        {"query": t["query"], "positive": t["positive"],
-         **{f"negative_{i+1}": neg for i, neg in enumerate(t["negatives"])}}
-        for t in triplets
-    ]
-    return Dataset.from_list(rows)
+
+    data = {
+        "anchor": [t["query"] for t in triplets],
+        "positive": [t["positive"] for t in triplets],
+        "negative": [t["negatives"][0] for t in triplets] 
+    }
+    return Dataset.from_dict(data)
 
 
 class Evaluator(SentenceEvaluator):
     def __init__(self, triplets: list[dict], batch_size: int = 256, max_samples: int = 2000):
-        self.triplets   = triplets[:max_samples]
+        import random
+        eval_data = triplets.copy()
+        random.shuffle(eval_data)
+        self.triplets = eval_data[:max_samples]
         self.batch_size = batch_size
-        self.primary_metric = "MRR_at_10"
 
     def __call__(self, model, output_path=None, epoch=-1, steps=-1) -> dict[str, float]:
-        raw = evaluate_retrieval(model, self.triplets, batch_size=self.batch_size, ks=[1, 5, 10])
-        metrics = {k.replace("@", "_at_"): v for k, v in raw.items()}
-        logger.info("=== Epoch %d — Evaluation ===", epoch)
-        for k, v in metrics.items():
-            logger.info("  %s: %.4f", k, v)
-        return metrics
+        results = evaluate_retrieval(model, self.triplets, batch_size=self.batch_size)
+        clean_results = {k.replace("@", "_at_"): v for k, v in results.items()}
 
-
-def free_vram() -> None:
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        torch.cuda.ipc_collect()
+        logger.info(f"Epoch {epoch} Step {steps} Evaluation: {clean_results}")
+        return clean_results
 
 
 def train(args: argparse.Namespace) -> None:
-    free_vram()
     device = get_device()
     logger.info("Device: %s", device)
 
@@ -69,23 +60,27 @@ def train(args: argparse.Namespace) -> None:
     )
 
     train_dataset = triplets_to_dataset(train_triplets)
+    evaluator = Evaluator(dev_triplets, batch_size=args.eval_batch_size)
 
     model      = load_model(args.model_name)
     train_loss = get_loss(model)
 
-    total_steps  = (len(train_dataset) // args.batch_size) * args.epochs
-    warmup_steps = int(total_steps * args.warmup_ratio)
+    column_mapping = {
+        "anchor": "anchor", 
+        "positive": "positive", 
+        "negative": "negative"
+    }
 
     training_args = SentenceTransformerTrainingArguments(
         output_dir          = args.output_dir,
         num_train_epochs    = args.epochs,
         per_device_train_batch_size = args.batch_size,
+        per_device_eval_batch_size=args.eval_batch_size,
         learning_rate       = args.lr,
-        warmup_steps        = warmup_steps,
+        warmup_ratio        = args.warmup_ratio,
         weight_decay                = args.weight_decay,
         max_grad_norm               = args.max_grad_norm,
-        gradient_accumulation_steps = args.grad_accum,
-        fp16                = args.fp16 and device == "cuda",
+        gradient_accumulation_steps = 1,
         logging_steps       = args.log_every,
         eval_strategy       = "epoch",
         save_strategy       = "epoch",
@@ -95,25 +90,28 @@ def train(args: argparse.Namespace) -> None:
         greater_is_better      = True,
         dataloader_num_workers = 2,
         report_to           = "none",
+        max_steps           = args.max_steps,
     )
 
     evaluator = Evaluator(dev_triplets, batch_size=args.eval_batch_size)
 
     trainer = SentenceTransformerTrainer(
-        model         = model,
-        args          = training_args,
-        train_dataset = train_dataset,
-        loss          = train_loss,
-        evaluator     = evaluator,
-        callbacks     = [EarlyStoppingCallback(early_stopping_patience=args.patience)],
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset,
+        loss=train_loss,
+        evaluator=evaluator,
+        column_mapping=column_mapping,
+        callbacks=[
+            EarlyStoppingCallback(early_stopping_patience=args.patience),
+        ],
     )
 
-    trainer.train()
+    trainer.train(resume_from_checkpoint=args.resume_from)
     logger.info("Training done. Model saved to %s", args.output_dir)
 
     logger.info("Running final test evaluation...")
-    best_model   = load_model(args.output_dir)
-    test_metrics = evaluate_retrieval(best_model, test_triplets, ks=[1, 5, 10])
+    test_metrics = evaluate_retrieval(model, test_triplets, ks=[1, 5, 10])
     logger.info("=== TEST RESULTS ===")
     for k, v in test_metrics.items():
         logger.info("  %s: %.4f", k, v)
@@ -134,12 +132,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--eval-batch-size", type=int,   default=256)
     p.add_argument("--seed",            type=int,   default=42)
     p.add_argument("--log-every",       type=int,   default=10)
-    p.add_argument("--fp16",            action="store_true", default=True)
-    p.add_argument("--no-fp16",         dest="fp16", action="store_false")
     p.add_argument("--patience",        type=int,   default=3)
     p.add_argument("--weight-decay",    type=float, default=0.01)
     p.add_argument("--max-grad-norm",   type=float, default=1.0)
     p.add_argument("--grad-accum",      type=int,   default=4)
+    p.add_argument("--resume-from",     default=None)
+    p.add_argument("--max-steps",       type=int,   default=-1)
 
     return p.parse_args()
 

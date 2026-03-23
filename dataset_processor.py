@@ -24,9 +24,17 @@ def build_triplets(df: pd.DataFrame, max_hard_neg: int = MAX_HARD_NEG) -> list[d
             return None
         return {"query": row["query"], "positive": row["positive"], "negatives": list(negs[:max_hard_neg])}
 
-    triplets = [r for r in df.apply(select_hard_negs, axis=1) if r is not None]
-    logger.info("Built %d triplets from %d records", len(triplets), len(df))
-    return triplets
+    raw_triplets = [r for r in df.apply(select_hard_negs, axis=1) if r is not None]
+ 
+    seen_positives: set[str] = set()
+    deduped = []
+    for t in raw_triplets:
+        if t["positive"] not in seen_positives:
+            seen_positives.add(t["positive"])
+            deduped.append(t)
+            
+    logger.info("Sau khi khử trùng: còn %d triplets (loại bỏ %d)", len(deduped), len(raw_triplets) - len(deduped))
+    return deduped
 
 
 def split_by_query(
@@ -35,25 +43,31 @@ def split_by_query(
     dev_ratio: float   = DEV_RATIO,
     seed: int          = SEED,
 ) -> tuple[list[dict], list[dict], list[dict]]:
-    rng     = random.Random(seed)
-    queries = list({t["query"] for t in triplets})
-    rng.shuffle(queries)
+    
+    rng = random.Random(seed)
+ 
+    unique_queries = list({t["query"] for t in triplets})
 
-    n            = len(queries)
-    n_dev        = max(1, int(n * dev_ratio))
-    n_test       = max(1, int(n * (1 - train_ratio - dev_ratio)))
-    dev_queries  = set(queries[:n_dev])
-    test_queries = set(queries[n_dev : n_dev + n_test])
-    train_queries = set(queries[n_dev + n_test:])
+    rng.shuffle(unique_queries)
 
-    train = [t for t in triplets if t["query"] in train_queries]
-    dev   = [t for t in triplets if t["query"] in dev_queries]
-    test  = [t for t in triplets if t["query"] in test_queries]
+    n = len(unique_queries)
+    n_dev = max(1, int(n * dev_ratio))
+    n_test = max(1, int(n * (1.0 - train_ratio - dev_ratio)))
+ 
+    dev_q_set   = set(unique_queries[:n_dev])
+    test_q_set  = set(unique_queries[n_dev : n_dev + n_test])
+    train_q_set = set(unique_queries[n_dev + n_test:])
+
+    train = [t for t in triplets if t["query"] in train_q_set]
+    dev   = [t for t in triplets if t["query"] in dev_q_set]
+    test  = [t for t in triplets if t["query"] in test_q_set]
+
+    assert len(dev_q_set.intersection(train_q_set)) == 0
+    assert len(test_q_set.intersection(train_q_set)) == 0
 
     logger.info(
-        "Split — train: %d | dev: %d | test: %d  (queries: %d / %d / %d)",
-        len(train), len(dev), len(test),
-        len(train_queries), len(dev_queries), len(test_queries),
+        "Random Split thành công: Train: %d | Dev: %d | Test: %d",
+        len(train), len(dev), len(test)
     )
     return train, dev, test
 

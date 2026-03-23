@@ -13,8 +13,8 @@ if __name__ == "__main__":
     snapshot_download(repo_id=MODEL_NAME, local_dir=str(SAVE_DIR))
 
     print(f"Downloading {NEW_IMPL} ...")
-    # Download vào đúng HF modules cache để transformers tìm thấy offline
-    new_impl_cache = Path(constants.HF_MODULES_CACHE) / "transformers_modules" / "Alibaba-NLP" / "new-impl"
+    from transformers.utils import TRANSFORMERS_CACHE
+    new_impl_cache = Path(TRANSFORMERS_CACHE) / "modules" / "transformers_modules" / "Alibaba-NLP" / "new-impl"
     new_impl_cache.mkdir(parents=True, exist_ok=True)
     snapshot_download(repo_id=NEW_IMPL, local_dir=str(new_impl_cache))
 
