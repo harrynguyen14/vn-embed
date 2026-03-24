@@ -21,20 +21,15 @@ def evaluate_retrieval(
     n_queries = len(triplets)
     n_neg     = len(triplets[0]["negatives"]) 
 
-    pool = model.start_multi_process_pool()
-
-    try:
-        q_embs = model.encode_multi_process(
-            queries, pool, batch_size=batch_size, normalize_embeddings=True
-        )
-        pos_embs = model.encode_multi_process(
-            positives, pool, batch_size=batch_size, normalize_embeddings=True
-        )
-        neg_embs = model.encode_multi_process(
-            all_negs, pool, batch_size=batch_size, normalize_embeddings=True
-        )
-    finally:
-        model.stop_multi_process_pool(pool)
+    q_embs = model.encode(
+        queries, batch_size=batch_size, normalize_embeddings=True, show_progress_bar=False
+    )
+    pos_embs = model.encode(
+        positives, batch_size=batch_size, normalize_embeddings=True, show_progress_bar=False
+    )
+    neg_embs = model.encode(
+        all_negs, batch_size=batch_size, normalize_embeddings=True, show_progress_bar=False
+    )
 
     neg_embs = neg_embs.reshape(n_queries, n_neg, -1)
 

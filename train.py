@@ -133,7 +133,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-hard-neg",    type=int,   default=3)
     p.add_argument("--lr",              type=float, default=2e-5)
     p.add_argument("--warmup-steps",    type=int,   default=200)
-    p.add_argument("--eval-batch-size", type=int,   default=256)
+    p.add_argument("--eval-batch-size", type=int,   default=128)
     p.add_argument("--seed",            type=int,   default=42)
     p.add_argument("--log-every",       type=int,   default=10)
     p.add_argument("--patience",        type=int,   default=3)
