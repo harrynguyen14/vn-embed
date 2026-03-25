@@ -123,7 +123,7 @@ def run_batch(
     tokenizer,
     model,
     texts: list[str],
-    max_new_tokens: int = 80,
+    max_new_tokens: int = 60,
 ) -> list[str | None]:
     prompts = [PROMPT_TEMPLATE.format(text=t[:800]) for t in texts]
     inputs = tokenizer(
