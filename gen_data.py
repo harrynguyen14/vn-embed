@@ -36,19 +36,21 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s")
 logger = logging.getLogger(__name__)
 
 DATASET   = "GreenNode/quora-vn"
-HF_MODEL  = "VTSNLP/Llama3-ViettelSolutions-8B"
+HF_MODEL  = "Qwen/Qwen2.5-3B-Instruct"
 
 PROMPT_TEMPLATE = (
-    "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n"
+    "<|im_start|>system\n"
     "Bạn là trợ lý tạo dữ liệu huấn luyện cho mô hình embedding tiếng Việt. "
     "Nhiệm vụ: đọc đoạn văn bản và sinh ra một câu hỏi tự nhiên bằng tiếng Việt "
     "mà câu trả lời nằm trong đoạn văn đó. "
     "Chỉ trả lời JSON duy nhất theo định dạng: {{\"query\": \"<câu hỏi>\"}}, không giải thích."
-    "<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n"
+    "<|im_end|>\n"
+    "<|im_start|>user\n"
     "Đoạn văn:\n\"\"\"\n{text}\n\"\"\"\n\n"
     "Sinh 1 câu hỏi tiếng Việt tự nhiên cho đoạn văn trên. "
     "Trả lời JSON: {{\"query\": \"<câu hỏi>\"}}"
-    "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+    "<|im_end|>\n"
+    "<|im_start|>assistant\n"
 )
 
 
