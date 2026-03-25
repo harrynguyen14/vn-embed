@@ -119,37 +119,34 @@ def _parse_query(text: str) -> str | None:
         return None
 
 
-def run_batch(
-    tokenizer,
-    model,
-    texts: list[str],
-    max_new_tokens: int = 40,
-) -> list[str | None]:
-    prompts = [PROMPT_TEMPLATE.format(text=t[:800]) for t in texts]
+def run_batch(tokenizer, model, texts, max_new_tokens=40):
+    prompts = [PROMPT_TEMPLATE.format(text=t[:256]) for t in texts]
+
     inputs = tokenizer(
         prompts,
         return_tensors="pt",
         padding=True,
         truncation=True,
-        max_length=1024,
+        max_length=512,
     ).to(model.device)
+
+    input_lengths = inputs["attention_mask"].sum(dim=1)
 
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
-            temperature=0.0,
             do_sample=False,
+            use_cache=True,
             pad_token_id=tokenizer.pad_token_id,
             eos_token_id=tokenizer.eos_token_id,
         )
 
-    # Chỉ lấy phần generated (bỏ phần prompt)
-    input_len = inputs["input_ids"].shape[1]
     results = []
-    for out in outputs:
-        generated = tokenizer.decode(out[input_len:], skip_special_tokens=True).strip()
+    for out, in_len in zip(outputs, input_lengths):
+        generated = tokenizer.decode(out[in_len:], skip_special_tokens=True).strip()
         results.append(_parse_query(generated))
+
     return results
 
 
