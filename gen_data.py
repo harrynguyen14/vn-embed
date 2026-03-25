@@ -11,7 +11,7 @@ from tqdm import tqdm
 from vllm import LLM, SamplingParams
 import os
 os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
-
+os.environ["VLLM_ATTENTION_BACKEND"] = "XFORMERS"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s")
 logger = logging.getLogger(__name__)
 
