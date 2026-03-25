@@ -11,12 +11,14 @@ from tqdm import tqdm
 from vllm import LLM, SamplingParams
 import os
 os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
-os.environ["VLLM_ATTENTION_BACKEND"] = "XFORMERS"
+os.environ["VLLM_ATTENTION_BACKEND"] = "TRITON_ATTN"
+
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s")
 logger = logging.getLogger(__name__)
 
 DATASET = "GreenNode/quora-vn"
-HF_MODEL = "Qwen/Qwen2.5-3B-Instruct"
+HF_MODEL = "Qwen/Qwen2.5-1.5B-Instruct"
 
 PROMPT_TEMPLATE = (
     "<|im_start|>system\n"
