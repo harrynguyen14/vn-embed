@@ -26,14 +26,14 @@ PROMPT_TEMPLATE = (
     "Quy tắc: (1) Phải là câu hỏi, kết thúc bằng dấu '?'. "
     "(2) Không được copy nguyên văn từ đoạn văn. "
     "(3) Diễn đạt theo cách người dùng thực sự sẽ hỏi. "
-    "Chỉ trả lời JSON: {\"query\": \"<câu hỏi>\"}, không giải thích."
+    'Chỉ trả lời JSON: {{"query": "<câu hỏi>"}}, không giải thích.'
     "<|im_end|>\n"
     "<|im_start|>user\n"
     "Đoạn văn:\n\"\"\"\n{text}\n\"\"\"\n\n"
-    "Trả lời JSON: {\"query\": \"<câu hỏi>\"}"
+    'Trả lời JSON: {{"query": "<câu hỏi>"}}'
     "<|im_end|>\n"
     "<|im_start|>assistant\n"
-    "{\"query\": \""
+    '{"query": "'
 )
 
 
