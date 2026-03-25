@@ -9,6 +9,8 @@ import pandas as pd
 from datasets import load_dataset
 from tqdm import tqdm
 from vllm import LLM, SamplingParams
+import os
+os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s")
 logger = logging.getLogger(__name__)
@@ -87,9 +89,12 @@ def generate(args: argparse.Namespace) -> None:
     llm = LLM(
         model=HF_MODEL,
         trust_remote_code=True,
-        gpu_memory_utilization=0.90, # Dùng 90% VRAM T4
-        max_model_len=1024,          # Giới hạn context để tiết kiệm RAM
-        dtype="float16"              # T4 chạy float16/half là tốt nhất
+        gpu_memory_utilization=0.85, 
+        max_model_len=1024,
+        dtype="float16",
+        # QUAN TRỌNG: T4 không hỗ trợ Flash Attention 2, dùng XFormers hoặc Eager
+        enforce_eager=True, 
+        disable_log_stats=True
     )
 
     sampling_params = SamplingParams(
