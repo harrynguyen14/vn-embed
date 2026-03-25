@@ -78,31 +78,28 @@ def load_uncovered_corpus() -> dict[str, str]:
 def load_model(hf_token: str):
     logger.info("Loading model %s (4-bit) ...", HF_MODEL)
 
-    # Giải phóng VRAM trước khi load
     torch.cuda.empty_cache()
-    torch.cuda.synchronize()
 
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_compute_dtype=torch.float16,
         bnb_4bit_use_double_quant=True,
         bnb_4bit_quant_type="nf4",
+        llm_int8_enable_fp32_cpu_offload=True,
     )
     tokenizer = AutoTokenizer.from_pretrained(HF_MODEL, token=hf_token)
     tokenizer.padding_side = "left"
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # max_memory: để ~1GB buffer, phần còn lại offload sang CPU RAM
-    max_memory = {0: "13GiB", "cpu": "24GiB"}
-
     model = AutoModelForCausalLM.from_pretrained(
         HF_MODEL,
         quantization_config=bnb_config,
         device_map="auto",
-        max_memory=max_memory,
+        max_memory={0: "12GiB", "cpu": "30GiB"},
         token=hf_token,
         low_cpu_mem_usage=True,
+        torch_dtype=torch.float16,
     )
     model.eval()
     logger.info("Model loaded. VRAM: %.1f GB", torch.cuda.memory_allocated() / 1e9)
