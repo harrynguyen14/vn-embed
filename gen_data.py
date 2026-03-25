@@ -1,24 +1,3 @@
-"""
-gen_data.py — Sinh synthetic queries từ corpus GreenNode/quora-vn chưa có qrel.
-Chạy trên Kaggle T4 15GB với 4-bit quantization + batch inference.
-
-Pipeline:
-  1. Load corpus + qrels từ HuggingFace
-  2. Lọc corpus chưa có qrel
-  3. Batch inference local (transformers + bitsandbytes 4-bit)
-  4. Lưu Parquet {"query", "positive", "negatives": []}
-
-Ước tính: ~3-5h cho 511k passages trên T4 (batch_size=16)
-
-Cài đặt trên Kaggle:
-  !pip install -q bitsandbytes accelerate
-
-Usage:
-  python gen_data.py --hf-token hf_xxx
-  python gen_data.py --hf-token hf_xxx --batch-size 16 --sample 100000
-"""
-from __future__ import annotations
-
 import argparse
 import json
 import logging
@@ -27,16 +6,15 @@ import re
 from pathlib import Path
 
 import pandas as pd
-import torch
 from datasets import load_dataset
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from vllm import LLM, SamplingParams
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s")
 logger = logging.getLogger(__name__)
 
-DATASET   = "GreenNode/quora-vn"
-HF_MODEL  = "Qwen/Qwen2.5-3B-Instruct"
+DATASET = "GreenNode/quora-vn"
+HF_MODEL = "Qwen/Qwen2.5-3B-Instruct"
 
 PROMPT_TEMPLATE = (
     "<|im_start|>system\n"
@@ -53,173 +31,103 @@ PROMPT_TEMPLATE = (
     "<|im_start|>assistant\n"
 )
 
-
 def _passage_text(row: dict) -> str:
     title = (row.get("title") or "").strip()
     text  = (row.get("text")  or "").strip()
-    if title and title != text:
-        return f"{title}. {text}".strip(". ")
-    return text
-
+    return f"{title}. {text}".strip(". ") if title and title != text else text
 
 def load_uncovered_corpus() -> dict[str, str]:
     logger.info("Loading corpus từ %s ...", DATASET)
     corpus_ds = load_dataset(DATASET, "corpus", split="test")
-    corpus: dict[str, str] = {str(row["id"]): _passage_text(row) for row in corpus_ds}
-    logger.info("Corpus tổng: %d passages", len(corpus))
-
+    corpus = {str(row["id"]): _passage_text(row) for row in corpus_ds}
+    
     qrels_ds = load_dataset(DATASET, "default", split="test")
-    covered_ids: set[str] = {str(row["corpus-id"]) for row in qrels_ds}
+    covered_ids = {str(row["corpus-id"]) for row in qrels_ds}
 
     uncovered = {cid: text for cid, text in corpus.items() if cid not in covered_ids}
-    logger.info("Corpus chưa có qrel: %d / %d (%.1f%%)",
-                len(uncovered), len(corpus), len(uncovered) / len(corpus) * 100)
+    logger.info("Corpus chưa có qrel: %d / %d", len(uncovered), len(corpus))
     return uncovered
 
-
-def load_model(hf_token: str):
-    logger.info("Loading model %s (4-bit) ...", HF_MODEL)
-
-    torch.cuda.empty_cache()
-
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_compute_dtype=torch.float16,
-        bnb_4bit_use_double_quant=True,
-        bnb_4bit_quant_type="nf4",
-        llm_int8_enable_fp32_cpu_offload=True,
-    )
-    tokenizer = AutoTokenizer.from_pretrained(HF_MODEL, token=hf_token)
-    tokenizer.padding_side = "left"
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    model = AutoModelForCausalLM.from_pretrained(
-        HF_MODEL,
-        quantization_config=bnb_config,
-        device_map="auto",
-        max_memory={0: "12GiB", "cpu": "30GiB"},
-        token=hf_token,
-        low_cpu_mem_usage=True,
-        torch_dtype=torch.float16,
-    )
-    model.eval()
-    logger.info("Model loaded. VRAM: %.1f GB", torch.cuda.memory_allocated() / 1e9)
-    return tokenizer, model
-
-
 def _parse_query(text: str) -> str | None:
-    match = re.search(r'\{.*?"query"\s*:\s*"(.+?)"\s*\}', text, re.DOTALL)
-    if match:
-        return match.group(1).strip()
+    # Ưu tiên regex để lấy nội dung trong JSON query
+    match = re.search(r'"query"\s*:\s*"(.+?)"', text, re.DOTALL)
+    if match: return match.group(1).strip()
     try:
         data = json.loads(text)
-        return data.get("query") or data.get("queries", [None])[0]
-    except (json.JSONDecodeError, IndexError):
-        return None
-
-
-def run_batch(tokenizer, model, texts, max_new_tokens=40):
-    prompts = [PROMPT_TEMPLATE.format(text=t[:256]) for t in texts]
-
-    inputs = tokenizer(
-        prompts,
-        return_tensors="pt",
-        padding=True,
-        truncation=True,
-        max_length=512,
-    ).to(model.device)
-
-    input_lengths = inputs["attention_mask"].sum(dim=1)
-
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            do_sample=False,
-            use_cache=True,
-            pad_token_id=tokenizer.pad_token_id,
-            eos_token_id=tokenizer.eos_token_id,
-        )
-
-    results = []
-    for out, in_len in zip(outputs, input_lengths):
-        generated = tokenizer.decode(out[in_len:], skip_special_tokens=True).strip()
-        results.append(_parse_query(generated))
-
-    return results
-
+        return data.get("query")
+    except: return None
 
 def generate(args: argparse.Namespace) -> None:
     uncovered = load_uncovered_corpus()
-
     all_ids = list(uncovered.keys())
-    if args.sample is not None:
-        rng = random.Random(args.seed)
-        all_ids = rng.sample(all_ids, min(args.sample, len(all_ids)))
+    
+    if args.sample:
+        random.seed(args.seed)
+        all_ids = random.sample(all_ids, min(args.sample, len(all_ids)))
 
     output_path = Path(args.output)
-    done_passages: set[str] = set()
-    records: list[dict] = []
+    done_ids = set()
+    records = []
 
     if output_path.exists():
         existing_df = pd.read_parquet(output_path)
         records = existing_df.to_dict("records")
-        done_passages = {r["positive"] for r in records}
+        done_ids = {str(r["corpus_id"]) for r in records}
         logger.info("Resume: đã có %d records", len(records))
 
-    batch_items = [(cid, uncovered[cid]) for cid in all_ids if uncovered[cid] not in done_passages]
-    logger.info("Sẽ xử lý: %d passages | batch_size=%d", len(batch_items), args.batch_size)
-    logger.info("Ước tính: ~%.1f giờ", len(batch_items) / args.batch_size * 1.5 / 3600)
+    # Lọc những câu chưa làm
+    to_process_ids = [cid for cid in all_ids if cid not in done_ids]
+    if not to_process_ids:
+        logger.info("Không còn dữ liệu mới để xử lý.")
+        return
 
-    tokenizer, model = load_model(args.hf_token)
+    logger.info("Sẽ xử lý: %d passages với vLLM", len(to_process_ids))
 
-    save_every = 2000
-    errors = 0
-    n_batches = (len(batch_items) + args.batch_size - 1) // args.batch_size
+    # Khởi tạo vLLM - Tối ưu cho T4 16GB
+    llm = LLM(
+        model=HF_MODEL,
+        trust_remote_code=True,
+        gpu_memory_utilization=0.90, # Dùng 90% VRAM T4
+        max_model_len=1024,          # Giới hạn context để tiết kiệm RAM
+        dtype="float16"              # T4 chạy float16/half là tốt nhất
+    )
 
-    for i in tqdm(range(n_batches), desc="Generating queries"):
-        chunk = batch_items[i * args.batch_size : (i + 1) * args.batch_size]
-        cids  = [c for c, _ in chunk]
-        texts = [t for _, t in chunk]
+    sampling_params = SamplingParams(
+        temperature=0, 
+        max_tokens=64, 
+        stop=["<|im_end|>", "\n"]
+    )
 
-        queries = run_batch(tokenizer, model, texts)
+    # Chuẩn bị prompts
+    prompts = [PROMPT_TEMPLATE.format(text=uncovered[cid][:400]) for cid in to_process_ids]
 
-        for cid, text, query in zip(cids, texts, queries):
-            if query is None:
-                errors += 1
-                continue
+    # Chạy Batch Inference (vLLM tự quản lý batch cực nhanh)
+    outputs = llm.generate(prompts, sampling_params)
+
+    # Thu thập kết quả
+    for cid, output in zip(to_process_ids, outputs):
+        generated_text = output.outputs[0].text.strip()
+        query = _parse_query(generated_text)
+        
+        if query:
             records.append({
-                "query":     query,
-                "positive":  text,
+                "query": query,
+                "positive": uncovered[cid],
                 "negatives": [],
                 "corpus_id": cid,
-                "source":    "quora-vn-synthetic",
+                "source": "quora-vn-synthetic-vllm",
             })
 
-        if len(records) % save_every < args.batch_size:
-            _save(records, output_path)
-
-    _save(records, output_path)
-    logger.info("Hoàn thành! %d records | %d lỗi | Saved: %s", len(records), errors, output_path)
-
-
-def _save(records: list[dict], path: Path) -> None:
-    pd.DataFrame(records).to_parquet(path, index=False)
-    logger.info("Checkpoint: %d records -> %s", len(records), path)
-
-
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Gen synthetic queries - local inference T4")
-    p.add_argument("--hf-token",   required=True, help="HuggingFace token để download model")
-    p.add_argument("--batch-size", type=int, default=16,
-                   help="Batch size inference (default: 16, giảm nếu OOM)")
-    p.add_argument("--sample",     type=int, default=None,
-                   help="Giới hạn số passages (default: toàn bộ)")
-    p.add_argument("--output",     default="gen_quora_vn.parquet")
-    p.add_argument("--seed",       type=int, default=42)
-    return p.parse_args()
-
+    # Lưu file cuối cùng
+    df = pd.DataFrame(records)
+    df.to_parquet(output_path, index=False)
+    logger.info("Hoàn thành! Tổng cộng: %d records. Saved: %s", len(records), output_path)
 
 if __name__ == "__main__":
-    generate(parse_args())
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--hf-token", help="Tùy chọn nếu model public")
+    parser.add_argument("--sample", type=int, default=None)
+    parser.add_argument("--output", default="gen_quora_vn.parquet")
+    parser.add_argument("--seed", type=int, default=42)
+    args = parser.parse_args()
+    generate(args)
