@@ -26,11 +26,11 @@ PROMPT_TEMPLATE = (
     "Quy tắc: (1) Phải là câu hỏi, kết thúc bằng dấu '?'. "
     "(2) Không được copy nguyên văn từ đoạn văn. "
     "(3) Diễn đạt theo cách người dùng thực sự sẽ hỏi. "
-    'Chỉ trả lời JSON: {{"query": "<câu hỏi>"}}, không giải thích.'
+    'Chỉ trả lời JSON: {"query": "<câu hỏi>"}, không giải thích.'
     "<|im_end|>\n"
     "<|im_start|>user\n"
-    "Đoạn văn:\n\"\"\"\n{text}\n\"\"\"\n\n"
-    'Trả lời JSON: {{"query": "<câu hỏi>"}}'
+    'Đoạn văn:\n"""\nPASSAGE_PLACEHOLDER\n"""\n\n'
+    'Trả lời JSON: {"query": "<câu hỏi>"}'
     "<|im_end|>\n"
     "<|im_start|>assistant\n"
     '{"query": "'
@@ -129,7 +129,7 @@ def generate(args: argparse.Namespace) -> None:
 
     for chunk_start in tqdm(range(0, total, CHUNK_SIZE), desc="Chunks", unit="chunk"):
         chunk_ids = to_process_ids[chunk_start : chunk_start + CHUNK_SIZE]
-        prompts = [PROMPT_TEMPLATE.format(text=to_process[cid][:400]) for cid in chunk_ids]
+        prompts = [PROMPT_TEMPLATE.replace("PASSAGE_PLACEHOLDER", to_process[cid][:400]) for cid in chunk_ids]
 
         outputs = llm.generate(prompts, sampling_params)
 
