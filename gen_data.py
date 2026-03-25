@@ -91,43 +91,46 @@ def generate(args: argparse.Namespace) -> None:
     llm = LLM(
         model=HF_MODEL,
         trust_remote_code=True,
-        gpu_memory_utilization=0.85, 
+        gpu_memory_utilization=0.85,
         max_model_len=1024,
         dtype="float16",
         # QUAN TRỌNG: T4 không hỗ trợ Flash Attention 2, dùng XFormers hoặc Eager
-        enforce_eager=True, 
+        enforce_eager=True,
         disable_log_stats=True
     )
 
     sampling_params = SamplingParams(
-        temperature=0, 
-        max_tokens=64, 
+        temperature=0,
+        max_tokens=64,
         stop=["<|im_end|>", "\n"]
     )
 
-    # Chuẩn bị prompts
-    prompts = [PROMPT_TEMPLATE.format(text=uncovered[cid][:400]) for cid in to_process_ids]
+    CHUNK_SIZE = args.save_every
+    total = len(to_process_ids)
 
-    # Chạy Batch Inference (vLLM tự quản lý batch cực nhanh)
-    outputs = llm.generate(prompts, sampling_params)
+    for chunk_start in tqdm(range(0, total, CHUNK_SIZE), desc="Chunks", unit="chunk"):
+        chunk_ids = to_process_ids[chunk_start : chunk_start + CHUNK_SIZE]
+        prompts = [PROMPT_TEMPLATE.format(text=uncovered[cid][:400]) for cid in chunk_ids]
 
-    # Thu thập kết quả
-    for cid, output in zip(to_process_ids, outputs):
-        generated_text = output.outputs[0].text.strip()
-        query = _parse_query(generated_text)
-        
-        if query:
-            records.append({
-                "query": query,
-                "positive": uncovered[cid],
-                "negatives": [],
-                "corpus_id": cid,
-                "source": "quora-vn-synthetic-vllm",
-            })
+        outputs = llm.generate(prompts, sampling_params)
 
-    # Lưu file cuối cùng
-    df = pd.DataFrame(records)
-    df.to_parquet(output_path, index=False)
+        for cid, output in zip(chunk_ids, outputs):
+            generated_text = output.outputs[0].text.strip()
+            query = _parse_query(generated_text)
+            if query:
+                records.append({
+                    "query": query,
+                    "positive": uncovered[cid],
+                    "negatives": [],
+                    "corpus_id": cid,
+                    "source": "quora-vn-synthetic-vllm",
+                })
+
+        # Checkpoint sau mỗi chunk
+        df = pd.DataFrame(records)
+        df.to_parquet(output_path, index=False)
+        logger.info("Checkpoint: %d / %d processed, %d records saved", chunk_start + len(chunk_ids), total, len(records))
+
     logger.info("Hoàn thành! Tổng cộng: %d records. Saved: %s", len(records), output_path)
 
 if __name__ == "__main__":
@@ -136,5 +139,6 @@ if __name__ == "__main__":
     parser.add_argument("--sample", type=int, default=None)
     parser.add_argument("--output", default="gen_quora_vn.parquet")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--save-every", type=int, default=5000, dest="save_every")
     args = parser.parse_args()
     generate(args)
