@@ -123,7 +123,7 @@ def run_batch(
     tokenizer,
     model,
     texts: list[str],
-    max_new_tokens: int = 60,
+    max_new_tokens: int = 40,
 ) -> list[str | None]:
     prompts = [PROMPT_TEMPLATE.format(text=t[:800]) for t in texts]
     inputs = tokenizer(
@@ -138,8 +138,8 @@ def run_batch(
         outputs = model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
-            temperature=0.7,
-            do_sample=True,
+            temperature=0.0,
+            do_sample=False,
             pad_token_id=tokenizer.pad_token_id,
             eos_token_id=tokenizer.eos_token_id,
         )
