@@ -10,3 +10,4 @@ filtered_bkai.parquet
 faiss_docids.npy
 splits.zip
 .vscode
+output.md

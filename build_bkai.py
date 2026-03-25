@@ -120,7 +120,7 @@ def mine_hard_negatives(
 
         ce_scores = cross_encoder.predict(
             flat_pairs,
-            batch_size=CE_BATCH_SIZE,
+            batch_size=64,
             show_progress_bar=True,
         )
 
