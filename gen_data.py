@@ -7,7 +7,10 @@ from pathlib import Path
 
 import pandas as pd
 from datasets import load_dataset
-from tqdm import tqdm
+try:
+    from tqdm.auto import tqdm
+except ImportError:
+    from tqdm import tqdm
 from vllm import LLM, SamplingParams
 import os
 os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
