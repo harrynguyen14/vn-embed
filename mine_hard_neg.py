@@ -60,7 +60,7 @@ def build_corpus_index(
         logger.info("Pool size giới hạn còn: %d", total)
 
     # --- Bước 1: train FAISS index trên 100k mẫu đầu ---
-    TRAIN_SIZE = min(100_000, total)
+    TRAIN_SIZE = min(200_000, total)
     logger.info("Collecting %d samples để train FAISS ...", TRAIN_SIZE)
     train_texts = []
     for row in corpus_ds.select(range(TRAIN_SIZE)):
