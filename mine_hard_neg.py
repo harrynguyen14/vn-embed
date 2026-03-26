@@ -170,7 +170,10 @@ def mine(args: argparse.Namespace) -> None:
     logger.info("Records: %d", len(df))
 
     logger.info("Loading bi-encoder: %s ...", BI_ENCODER)
-    model = SentenceTransformer(BI_ENCODER, device="cuda")
+    import torch
+    model = SentenceTransformer(BI_ENCODER)
+    model = model.to(torch.device("cuda"))
+    logger.info("Model device: %s", next(model.parameters()).device)
 
     # Build hoặc load corpus index
     if Path(index_path).exists() and Path(ids_path).exists() and Path(texts_path).exists():
