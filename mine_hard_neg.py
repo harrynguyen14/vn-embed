@@ -32,6 +32,8 @@ def build_corpus_index(
     index_path: str,
     ids_path: str,
     texts_path: str,
+    pool_size: int | None = None,
+    pos_corpus_ids: list[str] | None = None,
 ) -> None:
     """
     Encode 8.8M corpus theo streaming chunks.
@@ -39,15 +41,29 @@ def build_corpus_index(
     - Train FAISS trước trên 500k samples, sau đó add từng chunk
     - Lưu ids + texts ra file riêng để dùng lúc mining
     """
-    logger.info("Loading corpus (streaming) từ %s ...", DATASET)
+    logger.info("Loading corpus từ %s ...", DATASET)
     corpus_ds = load_dataset(DATASET, "corpus", split="dev", streaming=False)
     total = len(corpus_ds)
     logger.info("Corpus size: %d", total)
 
-    # --- Bước 1: train FAISS index trên 500k mẫu đầu ---
-    logger.info("Collecting 500k samples để train FAISS ...")
+    # Giới hạn corpus pool nếu được yêu cầu (để chạy nhanh hơn trên Colab free)
+    if pool_size and pool_size < total:
+        import random as _random
+        pos_ids_set = set(pos_corpus_ids or [])
+        # Luôn giữ các positive ids, sample phần còn lại
+        all_row_ids = list(range(total))
+        _random.seed(42)
+        sampled = _random.sample(all_row_ids, min(pool_size, total))
+        selected_indices = sorted(set(sampled))
+        corpus_ds = corpus_ds.select(selected_indices)
+        total = len(corpus_ds)
+        logger.info("Pool size giới hạn còn: %d", total)
+
+    # --- Bước 1: train FAISS index trên 100k mẫu đầu ---
+    TRAIN_SIZE = min(100_000, total)
+    logger.info("Collecting %d samples để train FAISS ...", TRAIN_SIZE)
     train_texts = []
-    for row in corpus_ds.select(range(min(500_000, total))):
+    for row in corpus_ds.select(range(TRAIN_SIZE)):
         train_texts.append(_passage_text(row))
 
     train_embs = model.encode(
@@ -160,7 +176,11 @@ def mine(args: argparse.Namespace) -> None:
     if Path(index_path).exists() and Path(ids_path).exists() and Path(texts_path).exists():
         index, corpus_ids, corpus_texts = load_corpus_index(index_path, ids_path, texts_path)
     else:
-        build_corpus_index(model, args.corpus_batch, index_path, ids_path, texts_path)
+        build_corpus_index(
+            model, args.corpus_batch, index_path, ids_path, texts_path,
+            pool_size=args.pool_size,
+            pos_corpus_ids=df["corpus_id"].astype(str).tolist(),
+        )
         index, corpus_ids, corpus_texts = load_corpus_index(index_path, ids_path, texts_path)
 
     index.nprobe = 64
@@ -222,5 +242,7 @@ if __name__ == "__main__":
     parser.add_argument("--index-path",   default=f"{DRIVE}/msmarco_corpus.index", dest="index_path")
     parser.add_argument("--ids-path",     default=f"{DRIVE}/msmarco_corpus_ids.npy", dest="ids_path")
     parser.add_argument("--texts-path",   default=f"{DRIVE}/msmarco_corpus_texts.npy", dest="texts_path")
+    parser.add_argument("--pool-size",    type=int, default=None, dest="pool_size",
+                        help="Giới hạn corpus pool (None = toàn bộ 8.8M, 1_500_000 = nhanh hơn cho Colab free)")
     args = parser.parse_args()
     mine(args)
