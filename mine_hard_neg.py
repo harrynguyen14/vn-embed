@@ -16,7 +16,8 @@ DATASET    = "GreenNode/msmarco-vn"
 BI_ENCODER = "intfloat/multilingual-e5-base"
 DIM        = 768   # multilingual-e5-base output dim
 NLIST      = 4096  # IVFPQ centroids
-ENCODE_CHUNK = 50_000   # encode 50k mỗi lần → ~150MB float32, an toàn với RAM
+ENCODE_CHUNK  = 50_000   # encode 50k mỗi lần → ~150MB float32, an toàn với RAM
+CHECKPOINT_EVERY = 10    # save index + ids/texts sau mỗi N chunks (mỗi 500k docs)
 
 
 def _passage_text(row: dict) -> str:
@@ -58,21 +59,38 @@ def build_corpus_index(
     ).astype("float32")
     del train_texts
 
-    quantizer = faiss.IndexFlatIP(DIM)
-    index = faiss.IndexIVFPQ(quantizer, DIM, NLIST, 64, 8)
-    index.metric_type = faiss.METRIC_INNER_PRODUCT
-    logger.info("Training FAISS index ...")
-    index.train(train_embs)
+    if Path(index_path).exists() and Path(ids_path).exists():
+        # Resume: load index đã build dở
+        logger.info("Resume: loading existing index từ %s ...", index_path)
+        index = faiss.read_index(index_path)
+    else:
+        quantizer = faiss.IndexFlatIP(DIM)
+        index = faiss.IndexIVFPQ(quantizer, DIM, NLIST, 64, 8)
+        index.metric_type = faiss.METRIC_INNER_PRODUCT
+        logger.info("Training FAISS index ...")
+        index.train(train_embs)
     del train_embs
 
     # --- Bước 2: encode + add từng chunk, lưu ids/texts ra disk ---
     all_ids   = []
     all_texts = []
+    # Resume: load lại ids/texts đã save nếu có
+    done_count = 0
+    if Path(ids_path).exists() and Path(texts_path).exists():
+        all_ids   = np.load(ids_path,   allow_pickle=True).tolist()
+        all_texts = np.load(texts_path, allow_pickle=True).tolist()
+        done_count = len(all_ids)
+        logger.info("Resume: đã có %d / %d docs, bỏ qua ...", done_count, total)
+    else:
+        all_ids   = []
+        all_texts = []
+
     chunk_ids   = []
     chunk_texts = []
+    chunk_count = 0
 
     def flush_chunk():
-        nonlocal chunk_ids, chunk_texts
+        nonlocal chunk_ids, chunk_texts, chunk_count
         if not chunk_ids:
             return
         embs = model.encode(
@@ -87,8 +105,18 @@ def build_corpus_index(
         all_texts.extend(chunk_texts)
         chunk_ids.clear()
         chunk_texts.clear()
+        chunk_count += 1
 
-    for row in tqdm(corpus_ds, desc="Encoding corpus", total=total, unit="doc"):
+        # Checkpoint định kỳ
+        if chunk_count % CHECKPOINT_EVERY == 0:
+            faiss.write_index(index, index_path)
+            np.save(ids_path,   np.array(all_ids))
+            np.save(texts_path, np.array(all_texts))
+            logger.info("Checkpoint: %d / %d docs saved", len(all_ids), total)
+
+    for i, row in enumerate(tqdm(corpus_ds, desc="Encoding corpus", total=total, unit="doc")):
+        if i < done_count:
+            continue   # bỏ qua các doc đã xử lý
         chunk_ids.append(str(row["id"]))
         chunk_texts.append(_passage_text(row))
         if len(chunk_ids) >= ENCODE_CHUNK:
@@ -96,13 +124,9 @@ def build_corpus_index(
 
     flush_chunk()  # phần còn lại
 
-    logger.info("Saving FAISS index → %s", index_path)
+    logger.info("Saving final FAISS index → %s", index_path)
     faiss.write_index(index, index_path)
-
-    logger.info("Saving corpus ids → %s", ids_path)
-    np.save(ids_path, np.array(all_ids))
-
-    logger.info("Saving corpus texts → %s", texts_path)
+    np.save(ids_path,   np.array(all_ids))
     np.save(texts_path, np.array(all_texts))
 
     logger.info("Done. Index: %d vectors", index.ntotal)
