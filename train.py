@@ -57,8 +57,6 @@ class Evaluator(SentenceEvaluator):
 
 
 def train(args: argparse.Namespace) -> None:
-    # gte-multilingual-base uses custom modeling code incompatible with DataParallel
-    os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
     train_triplets, dev_triplets, test_triplets = build_dataloaders(
@@ -79,7 +77,7 @@ def train(args: argparse.Namespace) -> None:
         per_device_eval_batch_size  = args.eval_batch_size,
         ddp_find_unused_parameters  = False,
         bf16                        = False,
-        fp16                        = False,
+        fp16                        = True,
         learning_rate               = args.lr,
         warmup_steps                = args.warmup_steps,
         weight_decay                = args.weight_decay,
@@ -124,7 +122,7 @@ def train(args: argparse.Namespace) -> None:
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Train GTE multilingual embedding model")
 
-    p.add_argument("--model-name",      default="Alibaba-NLP/gte-multilingual-base")
+    p.add_argument("--model-name",      default="intfloat/multilingual-e5-base")
     p.add_argument("--data",            default="msmarco_vn_datasets.parquet")
     p.add_argument("--splits-dir",      default="splits")
     p.add_argument("--output-dir",      default="output/gte-vn")
