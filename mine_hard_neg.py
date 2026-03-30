@@ -8,22 +8,37 @@ import pandas as pd
 from datasets import load_dataset
 from sentence_transformers import SentenceTransformer
 from tqdm.auto import tqdm
+from functools import lru_cache
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s")
 logger = logging.getLogger(__name__)
 
 DATASET    = "GreenNode/msmarco-vn"
 BI_ENCODER = "intfloat/multilingual-e5-base"
-DIM        = 768   # multilingual-e5-base output dim
-NLIST      = 4096  # IVFPQ centroids
-ENCODE_CHUNK  = 200_000  # T4 15GB: 200k mỗi lần → ~600MB float32, vẫn an toàn
-CHECKPOINT_EVERY = 5     # save sau mỗi N chunks (mỗi 1M docs)
+DIM        = 768
+NLIST      = 4096
+ENCODE_CHUNK  = 100_000
+CHECKPOINT_EVERY = 5
 
 
 def _passage_text(row: dict) -> str:
     title = (row.get("title") or "").strip()
     text  = (row.get("text")  or "").strip()
     return f"{title}. {text}".strip(". ") if title and title != text else text
+
+
+def load_ids(ids_path: str):
+    with open(ids_path, "r", encoding="utf-8") as f:
+        return [line.strip() for line in f]
+
+
+@lru_cache(maxsize=10000)
+def get_text_by_idx(texts_path: str, idx: int):
+    with open(texts_path, "r", encoding="utf-8") as f:
+        for i, line in enumerate(f):
+            if i == idx:
+                return line.strip()
+    return None
 
 
 def build_corpus_index(
@@ -35,127 +50,94 @@ def build_corpus_index(
     pool_size: int | None = None,
     pos_corpus_ids: list[str] | None = None,
 ) -> None:
-    """
-    Encode 8.8M corpus theo streaming chunks.
-    - Không load toàn bộ embeddings vào RAM cùng lúc
-    - Train FAISS trước trên 500k samples, sau đó add từng chunk
-    - Lưu ids + texts ra file riêng để dùng lúc mining
-    """
+
     logger.info("Loading corpus từ %s ...", DATASET)
     corpus_ds = load_dataset(DATASET, "corpus", split="dev", streaming=False)
     total = len(corpus_ds)
     logger.info("Corpus size: %d", total)
 
-    # Giới hạn corpus pool nếu được yêu cầu (để chạy nhanh hơn trên Colab free)
     if pool_size and pool_size < total:
         import random as _random
-        pos_ids_set = set(pos_corpus_ids or [])
-        # Luôn giữ các positive ids, sample phần còn lại
-        all_row_ids = list(range(total))
         _random.seed(42)
-        sampled = _random.sample(all_row_ids, min(pool_size, total))
-        selected_indices = sorted(set(sampled))
-        corpus_ds = corpus_ds.select(selected_indices)
+        indices = _random.sample(range(total), min(pool_size, total))
+        corpus_ds = corpus_ds.select(sorted(indices))
         total = len(corpus_ds)
-        logger.info("Pool size giới hạn còn: %d", total)
+        logger.info("Pool size: %d", total)
 
-    # --- Bước 1: train FAISS index trên 100k mẫu đầu ---
-    TRAIN_SIZE = min(200_000, total)
-    logger.info("Collecting %d samples để train FAISS ...", TRAIN_SIZE)
-    train_texts = []
-    for row in corpus_ds.select(range(TRAIN_SIZE)):
-        train_texts.append(_passage_text(row))
+    TRAIN_SIZE = min(100_000, total)
+    train_texts = [_passage_text(row) for row in corpus_ds.select(range(TRAIN_SIZE))]
 
     train_embs = model.encode(
         ["passage: " + t[:512] for t in train_texts],
         batch_size=batch_size,
         normalize_embeddings=True,
-        show_progress_bar=True,
         convert_to_numpy=True,
     ).astype("float32")
-    del train_texts
 
-    if Path(index_path).exists() and Path(ids_path).exists():
-        # Resume: load index đã build dở
-        logger.info("Resume: loading existing index từ %s ...", index_path)
+    if Path(index_path).exists():
         index = faiss.read_index(index_path)
     else:
         quantizer = faiss.IndexFlatIP(DIM)
         index = faiss.IndexIVFPQ(quantizer, DIM, NLIST, 64, 8)
         index.metric_type = faiss.METRIC_INNER_PRODUCT
-        logger.info("Training FAISS index ...")
         index.train(train_embs)
-    del train_embs
 
-    # --- Bước 2: encode + add từng chunk, lưu ids/texts ra disk ---
-    all_ids   = []
-    all_texts = []
-    # Resume: load lại ids/texts đã save nếu có
-    done_count = 0
-    if Path(ids_path).exists() and Path(texts_path).exists():
-        all_ids   = np.load(ids_path,   allow_pickle=True).tolist()
-        all_texts = np.load(texts_path, allow_pickle=True).tolist()
-        done_count = len(all_ids)
-        logger.info("Resume: đã có %d / %d docs, bỏ qua ...", done_count, total)
-    else:
-        all_ids   = []
-        all_texts = []
+    del train_embs, train_texts
 
-    chunk_ids   = []
+    Path(ids_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(texts_path).parent.mkdir(parents=True, exist_ok=True)
+
+    if not Path(ids_path).exists():
+        open(ids_path, "w").close()
+    if not Path(texts_path).exists():
+        open(texts_path, "w").close()
+
+    chunk_ids = []
     chunk_texts = []
     chunk_count = 0
 
     def flush_chunk():
         nonlocal chunk_ids, chunk_texts, chunk_count
+
         if not chunk_ids:
             return
+
         embs = model.encode(
             ["passage: " + t[:512] for t in chunk_texts],
             batch_size=batch_size,
             normalize_embeddings=True,
-            show_progress_bar=False,
             convert_to_numpy=True,
         ).astype("float32")
+
         index.add(embs)
-        all_ids.extend(chunk_ids)
-        all_texts.extend(chunk_texts)
+
+        with open(ids_path, "a", encoding="utf-8") as f_id:
+            for i in chunk_ids:
+                f_id.write(i + "\n")
+
+        with open(texts_path, "a", encoding="utf-8") as f_txt:
+            for t in chunk_texts:
+                f_txt.write(t.replace("\n", " ") + "\n")
+
         chunk_ids.clear()
         chunk_texts.clear()
         chunk_count += 1
 
-        # Checkpoint định kỳ
         if chunk_count % CHECKPOINT_EVERY == 0:
             faiss.write_index(index, index_path)
-            np.save(ids_path,   np.array(all_ids))
-            np.save(texts_path, np.array(all_texts))
-            logger.info("Checkpoint: %d / %d docs saved", len(all_ids), total)
+            logger.info("Checkpoint: %d chunks", chunk_count)
 
-    for i, row in enumerate(tqdm(corpus_ds, desc="Encoding corpus", total=total, unit="doc")):
-        if i < done_count:
-            continue   # bỏ qua các doc đã xử lý
+    for row in tqdm(corpus_ds, total=total):
         chunk_ids.append(str(row["id"]))
         chunk_texts.append(_passage_text(row))
+
         if len(chunk_ids) >= ENCODE_CHUNK:
             flush_chunk()
 
-    flush_chunk()  # phần còn lại
+    flush_chunk()
 
-    logger.info("Saving final FAISS index → %s", index_path)
     faiss.write_index(index, index_path)
-    np.save(ids_path,   np.array(all_ids))
-    np.save(texts_path, np.array(all_texts))
-
-    logger.info("Done. Index: %d vectors", index.ntotal)
-
-
-def load_corpus_index(index_path: str, ids_path: str, texts_path: str):
-    logger.info("Loading FAISS index từ %s ...", index_path)
-    index = faiss.read_index(index_path)
-    index.nprobe = 64
-    corpus_ids   = np.load(ids_path,   allow_pickle=True).tolist()
-    corpus_texts = np.load(texts_path, allow_pickle=True).tolist()
-    logger.info("Index loaded: %d vectors", index.ntotal)
-    return index, corpus_ids, corpus_texts
+    logger.info("Done. Index size: %d", index.ntotal)
 
 
 def mine(args: argparse.Namespace) -> None:
@@ -174,29 +156,25 @@ def mine(args: argparse.Namespace) -> None:
     model = SentenceTransformer(BI_ENCODER)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
-    # T4 hỗ trợ fp16 → giảm VRAM ~50%, tốc độ encode tăng ~1.5-2x
     if device.type == "cuda":
         model = model.half()
-    logger.info("Model device: %s, dtype: %s", next(model.parameters()).device,
-                next(model.parameters()).dtype)
 
-    # Build hoặc load corpus index
-    if Path(index_path).exists() and Path(ids_path).exists() and Path(texts_path).exists():
-        index, corpus_ids, corpus_texts = load_corpus_index(index_path, ids_path, texts_path)
-    else:
+    if not (Path(index_path).exists() and Path(ids_path).exists() and Path(texts_path).exists()):
         build_corpus_index(
-            model, args.corpus_batch, index_path, ids_path, texts_path,
+            model,
+            args.corpus_batch,
+            index_path,
+            ids_path,
+            texts_path,
             pool_size=args.pool_size,
             pos_corpus_ids=df["corpus_id"].astype(str).tolist(),
         )
-        index, corpus_ids, corpus_texts = load_corpus_index(index_path, ids_path, texts_path)
 
-    index.nprobe = 32  # giảm từ 64 → 32: recall vẫn tốt, nhanh hơn ~2x
-    # Dùng array lookup trực tiếp thay dict để tiết kiệm RAM
-    corpus_texts_arr = np.array(corpus_texts)
-    del corpus_texts  # giải phóng list gốc
+    index = faiss.read_index(index_path)
+    index.nprobe = 32
 
-    # Encode queries
+    corpus_ids = load_ids(ids_path)
+
     logger.info("Encoding %d queries ...", len(df))
     q_embs = model.encode(
         ("query: " + df["query"]).tolist(),
@@ -208,14 +186,14 @@ def mine(args: argparse.Namespace) -> None:
 
     pos_ids = df["corpus_id"].astype(str).tolist()
 
-    # Search hard negatives
     logger.info("Searching hard negatives (top_k=%d) ...", args.top_k)
     SEARCH_BATCH = 1024
     hard_negs = []
 
-    for start in tqdm(range(0, len(q_embs), SEARCH_BATCH), desc="Mining", unit="batch"):
+    for start in tqdm(range(0, len(q_embs), SEARCH_BATCH)):
         batch_q    = q_embs[start : start + SEARCH_BATCH]
         batch_pids = pos_ids[start : start + SEARCH_BATCH]
+
         _, indices = index.search(batch_q, args.top_k)
 
         for nbrs, pid in zip(indices, batch_pids):
@@ -225,33 +203,33 @@ def mine(args: argparse.Namespace) -> None:
                     continue
                 if corpus_ids[idx] == pid:
                     continue
-                hard_neg = corpus_texts_arr[idx]
-                break
+                hard_neg = get_text_by_idx(texts_path, idx)
+                if hard_neg:
+                    break
             hard_negs.append(hard_neg)
 
     df["negatives"] = [[n] if n else [] for n in hard_negs]
     valid = df["negatives"].apply(len) > 0
-    logger.info("Records có hard neg: %d / %d (%.1f%%)",
-                valid.sum(), len(df), valid.mean() * 100)
 
     df_out = df[valid][["query", "positive", "negatives"]].reset_index(drop=True)
     df_out.to_parquet(output_path, index=False)
+
     logger.info("Saved: %s (%d records)", output_path, len(df_out))
 
 
 if __name__ == "__main__":
     DRIVE = "/content/drive/MyDrive/Colab Notebooks/vn-embed"
 
-    parser = argparse.ArgumentParser(description="Mine hard negatives từ msmarco-vn corpus")
+    parser = argparse.ArgumentParser()
     parser.add_argument("--input",        default="gen_msmarco_vn_clean.parquet")
     parser.add_argument("--output",       default="train_msmarco_vn.parquet")
     parser.add_argument("--top-k",        type=int, default=30,  dest="top_k")
     parser.add_argument("--corpus-batch", type=int, default=512, dest="corpus_batch")
     parser.add_argument("--query-batch",  type=int, default=1024, dest="query_batch")
     parser.add_argument("--index-path",   default=f"{DRIVE}/msmarco_corpus.index", dest="index_path")
-    parser.add_argument("--ids-path",     default=f"{DRIVE}/msmarco_corpus_ids.npy", dest="ids_path")
-    parser.add_argument("--texts-path",   default=f"{DRIVE}/msmarco_corpus_texts.npy", dest="texts_path")
-    parser.add_argument("--pool-size",    type=int, default=None, dest="pool_size",
-                        help="Giới hạn corpus pool (None = toàn bộ 8.8M, 1_500_000 = nhanh hơn cho Colab free)")
+    parser.add_argument("--ids-path",     default=f"{DRIVE}/msmarco_corpus_ids.txt", dest="ids_path")
+    parser.add_argument("--texts-path",   default=f"{DRIVE}/msmarco_corpus_texts.txt", dest="texts_path")
+    parser.add_argument("--pool-size",    type=int, default=None, dest="pool_size")
+
     args = parser.parse_args()
     mine(args)
