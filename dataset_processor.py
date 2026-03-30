@@ -9,30 +9,23 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s")
 
-INPUT_PATH   = Path("filtered_bkai.parquet")
+INPUT_PATH   = Path("msmarco_vn_datasets.parquet")
 SPLIT_DIR    = Path("splits")
-MAX_HARD_NEG = 3
-TRAIN_RATIO  = 0.90
-DEV_RATIO    = 0.05
+TRAIN_RATIO  = 0.80
+DEV_RATIO    = 0.10
 SEED         = 42
 
 
-def build_triplets(df: pd.DataFrame, max_hard_neg: int = MAX_HARD_NEG) -> list[dict]:
-    def select_hard_negs(row):
-        negs = row["negatives"]
-        if len(negs) < max_hard_neg:
-            return None
-        return {"query": row["query"], "positive": row["positive"], "negatives": list(negs[:max_hard_neg])}
+def build_triplets(df: pd.DataFrame) -> list[dict]:
+    raw_triplets = df[["query", "positive", "negatives"]].to_dict("records")
 
-    raw_triplets = [r for r in df.apply(select_hard_negs, axis=1) if r is not None]
- 
     seen_positives: set[str] = set()
     deduped = []
     for t in raw_triplets:
         if t["positive"] not in seen_positives:
             seen_positives.add(t["positive"])
             deduped.append(t)
-            
+
     logger.info("Sau khi khử trùng: còn %d triplets (loại bỏ %d)", len(deduped), len(raw_triplets) - len(deduped))
     return deduped
 
@@ -94,10 +87,9 @@ def load_splits(split_dir: Path = SPLIT_DIR) -> tuple[list[dict], list[dict], li
 
 
 def build_dataloaders(
-    input_path: Path  = INPUT_PATH,
+    input_path: Path = INPUT_PATH,
     split_dir: Path  = SPLIT_DIR,
-    max_hard_neg: int = MAX_HARD_NEG,
-    seed: int         = SEED,
+    seed: int        = SEED,
 ) -> tuple[list[dict], list[dict], list[dict]]:
 
     train_path = split_dir / "train.parquet"
@@ -107,7 +99,7 @@ def build_dataloaders(
     else:
         logger.info("Building splits from %s", input_path)
         df = pd.read_parquet(input_path)
-        triplets = build_triplets(df, max_hard_neg=max_hard_neg)
+        triplets = build_triplets(df)
         train_triplets, dev_triplets, test_triplets = split_by_query(triplets, seed=seed)
         save_splits(train_triplets, dev_triplets, test_triplets, split_dir)
 

@@ -61,10 +61,9 @@ def train(args: argparse.Namespace) -> None:
     os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
 
     train_triplets, dev_triplets, test_triplets = build_dataloaders(
-        input_path   = Path(args.data),
-        split_dir    = Path(args.splits_dir),
-        max_hard_neg = args.max_hard_neg,
-        seed         = args.seed,
+        input_path = Path(args.data),
+        split_dir  = Path(args.splits_dir),
+        seed       = args.seed,
     )
 
     train_dataset = sample_dataset(train_triplets)
@@ -125,12 +124,11 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Train GTE multilingual embedding model")
 
     p.add_argument("--model-name",      default="Alibaba-NLP/gte-multilingual-base")
-    p.add_argument("--data",            default="filtered_bkai.parquet")
+    p.add_argument("--data",            default="msmarco_vn_datasets.parquet")
     p.add_argument("--splits-dir",      default="splits")
     p.add_argument("--output-dir",      default="output/gte-vn")
     p.add_argument("--epochs",          type=int,   default=3)
     p.add_argument("--batch-size",      type=int,   default=8)
-    p.add_argument("--max-hard-neg",    type=int,   default=3)
     p.add_argument("--lr",              type=float, default=2e-5)
     p.add_argument("--warmup-steps",    type=int,   default=200)
     p.add_argument("--eval-batch-size", type=int,   default=128)

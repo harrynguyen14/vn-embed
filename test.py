@@ -17,10 +17,9 @@ def test(args: argparse.Namespace) -> None:
     model = load_model(args.model_path)
 
     _, _, test_triplets = build_dataloaders(
-        input_path    = Path(args.data),
-        batch_size    = args.batch_size,
-        max_hard_neg  = args.max_hard_neg,
-        seed          = args.seed,
+        input_path = Path(args.data),
+        split_dir  = Path(args.splits_dir),
+        seed       = args.seed,
     )
 
     logger.info("Evaluating on %d test triplets...", len(test_triplets))
@@ -34,11 +33,10 @@ def test(args: argparse.Namespace) -> None:
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Test trained GTE embedding model")
     p.add_argument("--model-path",     required=True, help="Path to saved model directory")
-    p.add_argument("--data",           default="filtered_bkai.parquet")
-    p.add_argument("--batch-size",     type=int, default=12)
-    p.add_argument("--max-hard-neg",   type=int, default=2)
-    p.add_argument("--eval-batch-size",type=int, default=256)
-    p.add_argument("--seed",           type=int, default=42)
+    p.add_argument("--data",            default="msmarco_vn_datasets.parquet")
+    p.add_argument("--splits-dir",      default="splits")
+    p.add_argument("--eval-batch-size", type=int, default=256)
+    p.add_argument("--seed",            type=int, default=42)
     return p.parse_args()
 
 
