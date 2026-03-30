@@ -91,7 +91,7 @@ def train(args: argparse.Namespace) -> None:
         load_best_model_at_end = True,
         metric_for_best_model  = "MRR_at_10",
         greater_is_better      = True,
-        dataloader_num_workers = 2,
+        dataloader_num_workers = 4,
         report_to           = "none",
         max_steps           = args.max_steps,
     )
