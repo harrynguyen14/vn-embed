@@ -17,7 +17,7 @@ DATASET    = "GreenNode/msmarco-vn"
 BI_ENCODER = "intfloat/multilingual-e5-base"
 DIM        = 768
 NLIST      = 4096
-ENCODE_CHUNK  = 159_744
+ENCODE_CHUNK  = 200_000
 CHECKPOINT_EVERY = 5
 
 
