@@ -21,9 +21,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s")
 
 def sample_dataset(triplets: list[dict]) -> Dataset:
     return Dataset.from_dict({
-        "anchor":   [t["query"]                  for t in triplets],
-        "positive": [t["positive"]               for t in triplets],
-        "negative": [random.choice(t["negatives"]) for t in triplets],
+        "anchor":   ["query: "   + t["query"]                    for t in triplets],
+        "positive": ["passage: " + t["positive"]                 for t in triplets],
+        "negative": ["passage: " + random.choice(t["negatives"]) for t in triplets],
     })
 
 

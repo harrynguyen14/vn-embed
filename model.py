@@ -13,7 +13,6 @@ def load_model(model_name: str = MODEL_NAME, max_seq_length: int = 256) -> Sente
         model_kwargs={"torch_dtype": torch.float32},
     )
     model.max_seq_length = max_seq_length
-    model.set_prompts({"query": "query: ", "passage": "passage: "})
 
     logger.info(f"Loaded model {model_name} with max_seq_length={max_seq_length}")
     return model
