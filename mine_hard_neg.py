@@ -64,7 +64,7 @@ def build_corpus_index(
         total = len(corpus_ds)
         logger.info("Pool size: %d", total)
 
-    TRAIN_SIZE = min(100_000, total)
+    TRAIN_SIZE = min(170_000, total)
     train_texts = [_passage_text(row) for row in corpus_ds.select(range(TRAIN_SIZE))]
 
     train_embs = model.encode(
