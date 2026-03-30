@@ -79,7 +79,7 @@ def train(args: argparse.Namespace) -> None:
         per_device_eval_batch_size  = args.eval_batch_size,
         ddp_find_unused_parameters  = False,
         bf16                        = False,
-        fp16                        = True,
+        fp16                        = False,
         learning_rate               = args.lr,
         warmup_steps                = args.warmup_steps,
         weight_decay                = args.weight_decay,
