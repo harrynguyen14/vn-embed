@@ -75,7 +75,7 @@ def train(args: argparse.Namespace) -> None:
         num_train_epochs    = args.epochs,
         per_device_train_batch_size = args.batch_size,
         per_device_eval_batch_size  = args.eval_batch_size,
-        ddp_find_unused_parameters  = False,
+        ddp_find_unused_parameters  = True,
         bf16                        = False,
         fp16                        = True,
         learning_rate               = args.lr,
