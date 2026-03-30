@@ -59,6 +59,7 @@ class Evaluator(SentenceEvaluator):
 def train(args: argparse.Namespace) -> None:
     # gte-multilingual-base uses custom modeling code incompatible with DataParallel
     os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
     train_triplets, dev_triplets, test_triplets = build_dataloaders(
         input_path = Path(args.data),
