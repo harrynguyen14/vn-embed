@@ -16,8 +16,8 @@ DATASET    = "GreenNode/msmarco-vn"
 BI_ENCODER = "intfloat/multilingual-e5-base"
 DIM        = 768   # multilingual-e5-base output dim
 NLIST      = 4096  # IVFPQ centroids
-ENCODE_CHUNK  = 50_000   # encode 50k mỗi lần → ~150MB float32, an toàn với RAM
-CHECKPOINT_EVERY = 10    # save index + ids/texts sau mỗi N chunks (mỗi 500k docs)
+ENCODE_CHUNK  = 200_000  # T4 15GB: 200k mỗi lần → ~600MB float32, vẫn an toàn
+CHECKPOINT_EVERY = 5     # save sau mỗi N chunks (mỗi 1M docs)
 
 
 def _passage_text(row: dict) -> str:
@@ -172,8 +172,13 @@ def mine(args: argparse.Namespace) -> None:
     logger.info("Loading bi-encoder: %s ...", BI_ENCODER)
     import torch
     model = SentenceTransformer(BI_ENCODER)
-    model = model.to(torch.device("cuda"))
-    logger.info("Model device: %s", next(model.parameters()).device)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
+    # T4 hỗ trợ fp16 → giảm VRAM ~50%, tốc độ encode tăng ~1.5-2x
+    if device.type == "cuda":
+        model = model.half()
+    logger.info("Model device: %s, dtype: %s", next(model.parameters()).device,
+                next(model.parameters()).dtype)
 
     # Build hoặc load corpus index
     if Path(index_path).exists() and Path(ids_path).exists() and Path(texts_path).exists():
@@ -186,8 +191,10 @@ def mine(args: argparse.Namespace) -> None:
         )
         index, corpus_ids, corpus_texts = load_corpus_index(index_path, ids_path, texts_path)
 
-    index.nprobe = 64
-    id2text = {cid: txt for cid, txt in zip(corpus_ids, corpus_texts)}
+    index.nprobe = 32  # giảm từ 64 → 32: recall vẫn tốt, nhanh hơn ~2x
+    # Dùng array lookup trực tiếp thay dict để tiết kiệm RAM
+    corpus_texts_arr = np.array(corpus_texts)
+    del corpus_texts  # giải phóng list gốc
 
     # Encode queries
     logger.info("Encoding %d queries ...", len(df))
@@ -216,10 +223,9 @@ def mine(args: argparse.Namespace) -> None:
             for idx in nbrs:
                 if idx < 0:
                     continue
-                cid = corpus_ids[idx]
-                if cid == pid:
+                if corpus_ids[idx] == pid:
                     continue
-                hard_neg = id2text.get(cid)
+                hard_neg = corpus_texts_arr[idx]
                 break
             hard_negs.append(hard_neg)
 
@@ -240,8 +246,8 @@ if __name__ == "__main__":
     parser.add_argument("--input",        default="gen_msmarco_vn_clean.parquet")
     parser.add_argument("--output",       default="train_msmarco_vn.parquet")
     parser.add_argument("--top-k",        type=int, default=30,  dest="top_k")
-    parser.add_argument("--corpus-batch", type=int, default=256, dest="corpus_batch")
-    parser.add_argument("--query-batch",  type=int, default=512, dest="query_batch")
+    parser.add_argument("--corpus-batch", type=int, default=512, dest="corpus_batch")
+    parser.add_argument("--query-batch",  type=int, default=1024, dest="query_batch")
     parser.add_argument("--index-path",   default=f"{DRIVE}/msmarco_corpus.index", dest="index_path")
     parser.add_argument("--ids-path",     default=f"{DRIVE}/msmarco_corpus_ids.npy", dest="ids_path")
     parser.add_argument("--texts-path",   default=f"{DRIVE}/msmarco_corpus_texts.npy", dest="texts_path")
