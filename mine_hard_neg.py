@@ -32,15 +32,6 @@ def load_ids(ids_path: str):
         return [line.strip() for line in f]
 
 
-@lru_cache(maxsize=10000)
-def get_text_by_idx(texts_path: str, idx: int):
-    with open(texts_path, "r", encoding="utf-8") as f:
-        for i, line in enumerate(f):
-            if i == idx:
-                return line.strip()
-    return None
-
-
 def build_corpus_index(
     model: SentenceTransformer,
     batch_size: int,
@@ -175,6 +166,11 @@ def mine(args: argparse.Namespace) -> None:
 
     corpus_ids = load_ids(ids_path)
 
+    corpus_texts = []
+    with open(texts_path, "r", encoding="utf-8") as f:
+        for line in f:
+            corpus_texts.append(line.strip())
+
     logger.info("Encoding %d queries ...", len(df))
     q_embs = model.encode(
         ("query: " + df["query"]).tolist(),
@@ -203,9 +199,8 @@ def mine(args: argparse.Namespace) -> None:
                     continue
                 if corpus_ids[idx] == pid:
                     continue
-                hard_neg = get_text_by_idx(texts_path, idx)
-                if hard_neg:
-                    break
+                hard_neg = corpus_texts[idx]
+                break
             hard_negs.append(hard_neg)
 
     df["negatives"] = [[n] if n else [] for n in hard_negs]
