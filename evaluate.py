@@ -11,56 +11,61 @@ def evaluate_retrieval(
     batch_size: int = 256,
     ks: list[int] = [1, 5, 10],
 ) -> dict[str, float]:
-    """
-    Full-corpus retrieval benchmark:
-    - Corpus = tất cả positives (unique) + tất cả negatives trong tập triplets
-    - Mỗi query tìm top-K trong corpus, tính rank của positive đúng
-    - Metrics: MRR@K, Recall@K, nDCG@K (chuẩn BEIR/MTEB)
-    """
+
     if not triplets:
         return {}
 
-    queries        = ["query: "   + t["query"]    for t in triplets]
-    raw_positives  = [t["positive"]               for t in triplets]
+    queries = ["query: " + t["query"] for t in triplets]
+    raw_positives = [t["positive"] for t in triplets]
 
-    # Xây corpus: union của tất cả passages (pos + neg), dedup theo text
-    corpus_set: dict[str, int] = {}
+    corpus_set = {}
     for t in triplets:
         for p in [t["positive"]] + list(t["negatives"]):
             if p not in corpus_set:
                 corpus_set[p] = len(corpus_set)
 
     corpus_texts = list(corpus_set.keys())
-    pos_indices  = np.array([corpus_set[p] for p in raw_positives])  # ground-truth idx trong corpus
+    pos_indices = np.array([corpus_set[p] for p in raw_positives])
 
     logger.info("Corpus size: %d | Queries: %d", len(corpus_texts), len(queries))
 
     q_embs = model.encode(
-        queries, batch_size=batch_size, normalize_embeddings=True, show_progress_bar=True,
-    ).astype("float32")
-    c_embs = model.encode(
-        ["passage: " + t for t in corpus_texts], batch_size=batch_size, normalize_embeddings=True, show_progress_bar=True,
+        queries,
+        batch_size=batch_size,
+        normalize_embeddings=True,
+        show_progress_bar=True,
     ).astype("float32")
 
-    # Batched rank computation để tránh OOM với corpus lớn
+    c_embs = model.encode(
+        ["passage: " + t for t in corpus_texts],
+        batch_size=batch_size,
+        normalize_embeddings=True,
+        show_progress_bar=True,
+    ).astype("float32")
+
     SCORE_BATCH = 512
     ranks = np.empty(len(queries), dtype=np.int32)
+
     for start in range(0, len(queries), SCORE_BATCH):
         end = min(start + SCORE_BATCH, len(queries))
-        scores_batch = q_embs[start:end] @ c_embs.T  # [batch, corpus]
+        scores_batch = q_embs[start:end] @ c_embs.T
+
         for i, gi in enumerate(range(start, end)):
             pos_score = scores_batch[i, pos_indices[gi]]
-            ranks[gi] = int(np.sum(scores_batch[i] >= pos_score))
+
+            rank = np.sum(scores_batch[i] > pos_score) + 1
+            ranks[gi] = int(rank)
 
     results = {}
+
     for k in ks:
         in_k = ranks <= k
-        rr   = np.where(in_k, 1.0 / ranks, 0.0)
-        dcg  = np.where(in_k, 1.0 / np.log2(ranks + 1), 0.0)
-        idcg = 1.0  # ideal: positive ở rank 1
 
-        results[f"MRR@{k}"]    = float(rr.mean())
+        rr = np.where(in_k, 1.0 / ranks, 0.0)
+        dcg = np.where(in_k, 1.0 / np.log2(ranks + 1), 0.0)
+
+        results[f"MRR@{k}"] = float(rr.mean())
         results[f"Recall@{k}"] = float(in_k.mean())
-        results[f"nDCG@{k}"]   = float((dcg / idcg).mean())
+        results[f"nDCG@{k}"] = float(dcg.mean())
 
     return results

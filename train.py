@@ -3,12 +3,11 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import random
 from pathlib import Path
 
 from sentence_transformers import SentenceTransformerTrainer, SentenceTransformerTrainingArguments
 from sentence_transformers.evaluation import SentenceEvaluator
-from transformers import EarlyStoppingCallback, TrainerCallback, TrainerControl, TrainerState
+from transformers import EarlyStoppingCallback
 from datasets import Dataset
 
 from dataset_processor import build_dataloaders
@@ -19,26 +18,12 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s")
 
 
-def sample_dataset(triplets: list[dict]) -> Dataset:
-    return Dataset.from_dict({
-        "anchor":   ["query: "   + t["query"]                    for t in triplets],
-        "positive": ["passage: " + t["positive"]                 for t in triplets],
-        "negative": ["passage: " + random.choice(t["negatives"]) for t in triplets],
+def build_dataset(triplets: list[dict]) -> Dataset:
+    dataset = Dataset.from_dict({
+        "anchor":   ["query: "   + t["query"]    for t in triplets],
+        "positive": ["passage: " + t["positive"] for t in triplets],
     })
-
-
-class ResampleNegativesCallback(TrainerCallback):
-    """Re-samples 1 hard negative per query at the start of each epoch."""
-    def __init__(self, triplets: list[dict]):
-        self.triplets = triplets
-        self._trainer = None
-
-    def on_init_end(self, args, state: TrainerState, control: TrainerControl, **kwargs):
-        self._trainer = kwargs.get("trainer")
-
-    def on_epoch_begin(self, args, state: TrainerState, control: TrainerControl, **kwargs):
-        if self._trainer is not None and state.epoch > 0:
-            self._trainer.train_dataset = sample_dataset(self.triplets)
+    return dataset.shuffle(seed=42)
 
 
 class Evaluator(SentenceEvaluator):
@@ -47,64 +32,68 @@ class Evaluator(SentenceEvaluator):
         self.batch_size = batch_size
 
     def __call__(self, model, output_path=None, epoch=-1, steps=-1) -> dict[str, float]:
-        import torch
         import torch.distributed as dist
+
         is_ddp = dist.is_initialized()
         is_main = not is_ddp or dist.get_rank() == 0
 
         if is_main:
             results = evaluate_retrieval(model, self.triplets, batch_size=self.batch_size)
-            clean_results = {k.replace("@", "_at_"): v for k, v in results.items()}
-            logger.info(f"Epoch {epoch} Step {steps} Evaluation: {clean_results}")
+            clean = {k.replace("@", "_at_"): v for k, v in results.items()}
+            logger.info(f"Epoch {epoch} Step {steps} Eval: {clean}")
         else:
-            clean_results = {}
+            clean = {}
 
-        # Broadcast kết quả từ rank 0 sang các rank khác để EarlyStopping hoạt động
         if is_ddp:
-            obj = [clean_results]
+            obj = [clean]
             dist.broadcast_object_list(obj, src=0)
-            clean_results = obj[0]
+            clean = obj[0]
 
-        return clean_results
+        return clean
 
 
 def train(args: argparse.Namespace) -> None:
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
     train_triplets, dev_triplets, test_triplets = build_dataloaders(
-        input_path = Path(args.data),
-        split_dir  = Path(args.splits_dir),
-        seed       = args.seed,
+        input_path=Path(args.data),
+        split_dir=Path(args.splits_dir),
+        seed=args.seed,
     )
 
-    train_dataset = sample_dataset(train_triplets)
+    train_dataset = build_dataset(train_triplets)
 
-    model      = load_model(args.model_name)
+    model = load_model(args.model_name)
     train_loss = get_loss(model)
 
     training_args = SentenceTransformerTrainingArguments(
-        output_dir          = args.output_dir,
-        num_train_epochs    = args.epochs,
-        per_device_train_batch_size = args.batch_size,
-        per_device_eval_batch_size  = args.eval_batch_size,
-        ddp_find_unused_parameters  = True,
-        bf16                        = False,
-        fp16                        = True,
-        learning_rate               = args.lr,
-        warmup_steps                = args.warmup_steps,
-        weight_decay                = args.weight_decay,
-        max_grad_norm               = args.max_grad_norm,
-        gradient_accumulation_steps = args.grad_accum,
-        logging_steps       = args.log_every,
-        eval_strategy       = "epoch",
-        save_strategy       = "epoch",
-        save_total_limit    = 2,
-        load_best_model_at_end = True,
-        metric_for_best_model  = "MRR_at_10",
-        greater_is_better      = True,
-        dataloader_num_workers = 4,
-        report_to           = "none",
-        max_steps           = args.max_steps,
+        output_dir=args.output_dir,
+        num_train_epochs=args.epochs,
+        per_device_train_batch_size=args.batch_size,
+        per_device_eval_batch_size=args.eval_batch_size,
+        gradient_accumulation_steps=args.grad_accum,
+
+        learning_rate=args.lr,
+        warmup_ratio=0.1,
+        weight_decay=args.weight_decay,
+        max_grad_norm=args.max_grad_norm,
+
+        fp16=True,
+        bf16=False,
+
+        eval_strategy="epoch",
+        save_strategy="epoch",
+        save_total_limit=2,
+        load_best_model_at_end=True,
+        metric_for_best_model="MRR_at_10",
+        greater_is_better=True,
+
+        logging_steps=args.log_every,
+        dataloader_num_workers=4,
+        report_to="none",
+
+        ddp_find_unused_parameters=False,
+        max_steps=args.max_steps,
     )
 
     evaluator = Evaluator(dev_triplets, batch_size=args.eval_batch_size)
@@ -117,14 +106,13 @@ def train(args: argparse.Namespace) -> None:
         evaluator=evaluator,
         callbacks=[
             EarlyStoppingCallback(early_stopping_patience=args.patience),
-            ResampleNegativesCallback(train_triplets),
         ],
     )
 
     trainer.train(resume_from_checkpoint=args.resume_from)
+
     logger.info("Training done. Model saved to %s", args.output_dir)
 
-    # Chỉ rank 0 chạy test eval để tránh double RAM khi dùng DDP
     import torch.distributed as dist
     if not dist.is_initialized() or dist.get_rank() == 0:
         logger.info("Running final test evaluation...")
@@ -135,25 +123,30 @@ def train(args: argparse.Namespace) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Train GTE multilingual embedding model")
+    p = argparse.ArgumentParser()
 
-    p.add_argument("--model-name",      default="intfloat/multilingual-e5-base")
-    p.add_argument("--data",            default="msmarco_vn_datasets.parquet")
-    p.add_argument("--splits-dir",      default="splits")
-    p.add_argument("--output-dir",      default="output/gte-vn")
-    p.add_argument("--epochs",          type=int,   default=3)
-    p.add_argument("--batch-size",      type=int,   default=8)
-    p.add_argument("--lr",              type=float, default=2e-5)
-    p.add_argument("--warmup-steps",    type=int,   default=200)
-    p.add_argument("--eval-batch-size", type=int,   default=128)
-    p.add_argument("--seed",            type=int,   default=42)
-    p.add_argument("--log-every",       type=int,   default=10)
-    p.add_argument("--patience",        type=int,   default=3)
-    p.add_argument("--weight-decay",    type=float, default=0.01)
-    p.add_argument("--max-grad-norm",   type=float, default=1.0)
-    p.add_argument("--grad-accum",      type=int,   default=4)
-    p.add_argument("--resume-from",     default=None)
-    p.add_argument("--max-steps",       type=int,   default=-1)
+    p.add_argument("--model-name", default="intfloat/multilingual-e5-base")
+    p.add_argument("--data", default="msmarco_vn_datasets.parquet")
+    p.add_argument("--splits-dir", default="splits")
+    p.add_argument("--output-dir", default="output/e5-vn")
+
+    p.add_argument("--epochs", type=int, default=3)
+    p.add_argument("--batch-size", type=int, default=32)
+    p.add_argument("--eval-batch-size", type=int, default=128)
+
+    p.add_argument("--lr", type=float, default=5e-6)
+    p.add_argument("--weight-decay", type=float, default=0.01)
+    p.add_argument("--max-grad-norm", type=float, default=1.0)
+
+    p.add_argument("--grad-accum", type=int, default=4)
+    p.add_argument("--warmup-steps", type=int, default=0)
+
+    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--log-every", type=int, default=10)
+    p.add_argument("--patience", type=int, default=3)
+
+    p.add_argument("--resume-from", default=None)
+    p.add_argument("--max-steps", type=int, default=-1)
 
     return p.parse_args()
 
