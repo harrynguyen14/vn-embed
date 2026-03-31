@@ -10,7 +10,7 @@ from sentence_transformers.evaluation import SentenceEvaluator
 from transformers import EarlyStoppingCallback
 from datasets import Dataset
 
-from dataset_processor import build_dataloaders
+from dataset_processor import build_triplets, load_splits, save_splits, split_by_query
 from evaluate import evaluate_retrieval
 from model import get_loss, load_model
 
@@ -55,11 +55,20 @@ class Evaluator(SentenceEvaluator):
 def train(args: argparse.Namespace) -> None:
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
-    train_triplets, dev_triplets, test_triplets = build_dataloaders(
-        input_path=Path(args.data),
-        split_dir=Path(args.splits_dir),
-        seed=args.seed,
-    )
+    split_dir = Path(args.splits_dir)
+    train_path = split_dir / "train.parquet"
+    if train_path.exists():
+        logger.info("Loading splits from %s", split_dir)
+        train_triplets, dev_triplets, test_triplets = load_splits(split_dir)
+    else:
+        logger.info("Building splits from %s", args.data)
+        import pandas as pd
+        df = pd.read_parquet(args.data)
+        triplets = build_triplets(df)
+        train_triplets, dev_triplets, test_triplets = split_by_query(
+            triplets, train_ratio=0.80, dev_ratio=0.10, seed=args.seed,
+        )
+        save_splits(train_triplets, dev_triplets, test_triplets, split_dir)
 
     train_dataset = build_dataset(train_triplets)
 
@@ -92,7 +101,7 @@ def train(args: argparse.Namespace) -> None:
         dataloader_num_workers=4,
         report_to="none",
 
-        ddp_find_unused_parameters=False,
+        ddp_find_unused_parameters=True,
         max_steps=args.max_steps,
     )
 
