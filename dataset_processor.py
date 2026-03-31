@@ -22,6 +22,7 @@ MODEL_NAME = "intfloat/multilingual-e5-base"
 BATCH_SIZE = 64
 DELTA_THRESHOLD = 0.05
 
+USE_FILTER = False
 
 def encode(model, texts, batch_size=BATCH_SIZE):
     embeddings = []
@@ -68,7 +69,10 @@ def filter_triplets(triplets: list[dict]) -> list[dict]:
 
 def build_triplets(df: pd.DataFrame) -> list[dict]:
     triplets = df[["query", "positive", "negatives"]].to_dict("records")
-    triplets = filter_triplets(triplets)
+
+    if USE_FILTER:
+        triplets = filter_triplets(triplets)
+
     return triplets
 
 
