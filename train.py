@@ -42,17 +42,29 @@ class ResampleNegativesCallback(TrainerCallback):
 
 
 class Evaluator(SentenceEvaluator):
-    def __init__(self, triplets: list[dict], batch_size: int = 256, max_samples: int = 2000):
-        eval_data = triplets.copy()
-        random.shuffle(eval_data)
-        self.triplets = eval_data[:max_samples]
+    def __init__(self, triplets: list[dict], batch_size: int = 256):
+        self.triplets = triplets
         self.batch_size = batch_size
 
     def __call__(self, model, output_path=None, epoch=-1, steps=-1) -> dict[str, float]:
-        results = evaluate_retrieval(model, self.triplets, batch_size=self.batch_size)
-        clean_results = {k.replace("@", "_at_"): v for k, v in results.items()}
+        import torch
+        import torch.distributed as dist
+        is_ddp = dist.is_initialized()
+        is_main = not is_ddp or dist.get_rank() == 0
 
-        logger.info(f"Epoch {epoch} Step {steps} Evaluation: {clean_results}")
+        if is_main:
+            results = evaluate_retrieval(model, self.triplets, batch_size=self.batch_size)
+            clean_results = {k.replace("@", "_at_"): v for k, v in results.items()}
+            logger.info(f"Epoch {epoch} Step {steps} Evaluation: {clean_results}")
+        else:
+            clean_results = {}
+
+        # Broadcast kết quả từ rank 0 sang các rank khác để EarlyStopping hoạt động
+        if is_ddp:
+            obj = [clean_results]
+            dist.broadcast_object_list(obj, src=0)
+            clean_results = obj[0]
+
         return clean_results
 
 
@@ -112,11 +124,14 @@ def train(args: argparse.Namespace) -> None:
     trainer.train(resume_from_checkpoint=args.resume_from)
     logger.info("Training done. Model saved to %s", args.output_dir)
 
-    logger.info("Running final test evaluation...")
-    test_metrics = evaluate_retrieval(model, test_triplets, ks=[1, 5, 10])
-    logger.info("=== TEST RESULTS ===")
-    for k, v in test_metrics.items():
-        logger.info("  %s: %.4f", k, v)
+    # Chỉ rank 0 chạy test eval để tránh double RAM khi dùng DDP
+    import torch.distributed as dist
+    if not dist.is_initialized() or dist.get_rank() == 0:
+        logger.info("Running final test evaluation...")
+        test_metrics = evaluate_retrieval(model, test_triplets, ks=[1, 5, 10])
+        logger.info("=== TEST RESULTS ===")
+        for k, v in test_metrics.items():
+            logger.info("  %s: %.4f", k, v)
 
 
 def parse_args() -> argparse.Namespace:

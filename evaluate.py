@@ -20,8 +20,8 @@ def evaluate_retrieval(
     if not triplets:
         return {}
 
-    queries   = [t["query"]    for t in triplets]
-    positives = [t["positive"] for t in triplets]
+    queries        = ["query: "   + t["query"]    for t in triplets]
+    raw_positives  = [t["positive"]               for t in triplets]
 
     # Xây corpus: union của tất cả passages (pos + neg), dedup theo text
     corpus_set: dict[str, int] = {}
@@ -31,7 +31,7 @@ def evaluate_retrieval(
                 corpus_set[p] = len(corpus_set)
 
     corpus_texts = list(corpus_set.keys())
-    pos_indices  = np.array([corpus_set[p] for p in positives])  # ground-truth idx trong corpus
+    pos_indices  = np.array([corpus_set[p] for p in raw_positives])  # ground-truth idx trong corpus
 
     logger.info("Corpus size: %d | Queries: %d", len(corpus_texts), len(queries))
 
@@ -39,18 +39,18 @@ def evaluate_retrieval(
         queries, batch_size=batch_size, normalize_embeddings=True, show_progress_bar=True,
     ).astype("float32")
     c_embs = model.encode(
-        corpus_texts, batch_size=batch_size, normalize_embeddings=True, show_progress_bar=True,
+        ["passage: " + t for t in corpus_texts], batch_size=batch_size, normalize_embeddings=True, show_progress_bar=True,
     ).astype("float32")
 
-    # scores: [n_queries, corpus_size]
-    scores = q_embs @ c_embs.T  # cosine vì đã normalize
-
-    max_k = max(ks)
-    # rank của positive trong từng query (1-based)
-    ranks = np.array([
-        int(np.sum(scores[i] >= scores[i, pos_indices[i]]))
-        for i in range(len(queries))
-    ])  # số docs có score >= score(positive) = rank của positive
+    # Batched rank computation để tránh OOM với corpus lớn
+    SCORE_BATCH = 512
+    ranks = np.empty(len(queries), dtype=np.int32)
+    for start in range(0, len(queries), SCORE_BATCH):
+        end = min(start + SCORE_BATCH, len(queries))
+        scores_batch = q_embs[start:end] @ c_embs.T  # [batch, corpus]
+        for i, gi in enumerate(range(start, end)):
+            pos_score = scores_batch[i, pos_indices[gi]]
+            ranks[gi] = int(np.sum(scores_batch[i] >= pos_score))
 
     results = {}
     for k in ks:
