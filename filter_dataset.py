@@ -46,8 +46,13 @@ def filter_triplets(df: pd.DataFrame) -> pd.DataFrame:
     ]
 
     q_emb = encode(model, queries)
+    torch.cuda.empty_cache()
+
     p_emb = encode(model, positives)
+    torch.cuda.empty_cache()
+
     n_emb = encode(model, negatives)
+    torch.cuda.empty_cache()
 
     sim_qp = (q_emb * p_emb).sum(dim=1)
     sim_qn = (q_emb * n_emb).sum(dim=1)
