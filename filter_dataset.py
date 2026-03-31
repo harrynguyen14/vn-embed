@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s")
 
 MODEL_NAME = "intfloat/multilingual-e5-base"
-BATCH_SIZE = 64
+BATCH_SIZE = 256
 DELTA_THRESHOLD = 0.05
 
 
